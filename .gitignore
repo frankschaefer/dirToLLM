@@ -1,0 +1,154 @@
+# =====================================================
+# Python
+# =====================================================
+
+# Byte-compiled / optimized files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# =====================================================
+# Virtual Environments
+# =====================================================
+
+.venv/
+venv/
+ENV/
+env/
+.python-version
+
+# =====================================================
+# Packaging / Build
+# =====================================================
+
+build/
+dist/
+*.egg-info/
+.eggs/
+*.egg
+
+# =====================================================
+# Test / Coverage
+# =====================================================
+
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+nosetests.xml
+coverage.xml
+
+# =====================================================
+# Jupyter / IPython
+# =====================================================
+
+.ipynb_checkpoints/
+profile_default/
+ipython_config.py
+
+# =====================================================
+# Logs / Runtime
+# =====================================================
+
+*.log
+logs/
+*.pid
+*.seed
+*.pid.lock
+
+# =====================================================
+# Environment / Secrets
+# =====================================================
+
+.env
+.env.*
+*.env
+secrets.yml
+secrets.yaml
+config.local.*
+
+# =====================================================
+# macOS
+# =====================================================
+
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+
+# =====================================================
+# Editors / IDEs
+# =====================================================
+
+# Visual Studio Code
+.vscode/
+*.code-workspace
+
+# PyCharm / IntelliJ
+.idea/
+*.iml
+
+# Vim
+*.swp
+*.swo
+*~
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+
+# =====================================================
+# Project Specific
+# =====================================================
+
+# LLM Output Directory (generated summaries)
+~/LLM/
+
+# Temporary files
+*.tmp
+*.bak
+*.old
+
+# Local development files
+scratch/
+notes/
+TODO.local
+
+# =====================================================
+# Windows (for cross-platform compatibility)
+# =====================================================
+
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# =====================================================
+# Linux
+# =====================================================
+
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+.nfs*
