@@ -1,6 +1,6 @@
 # FileInventory - OneDrive Dokumenten-Zusammenfassung (macOS)
 
-**Version:** 1.6.3
+**Version:** 1.7.1
 **Datum:** 2025-12-25
 **Lizenz:** Proprietär
 
@@ -105,10 +105,11 @@ pip install -r requirements.txt
 #### Modell-Empfehlungen
 
 ##### Für Textverarbeitung (Standard)
-- **ministral-3-14b-reasoning** (optimiert für präzise Zusammenfassungen)
+- **mistralai/ministral-3-14b-reasoning** (empfohlen, getestet - 262k Tokens Context, hohe Präzision)
 - **ministral-3-3b-instruct** (leichtgewichtig, schnell)
 - **Mistral-7B-Instruct** (ausgewogen)
 - **Llama-3-8B-Instruct** (hochwertig)
+- **Qwen-2.5-14B** (sehr gut für deutsche Texte, 32k Tokens Context)
 
 ##### Für Bildverarbeitung (Vision-Modelle)
 - **LLaVA-v1.6-Mistral-7B**
@@ -128,6 +129,13 @@ pip install -r requirements.txt
 ```python
 LMSTUDIO_API_URL = "http://localhost:1234/v1/chat/completions"
 MODEL_NAME = "local-model"  # Ersetzen Sie mit dem Namen aus LM Studio
+
+# Modell Context-Länge (maximale Anzahl Tokens)
+# Passen Sie dies an Ihr Modell an:
+# - Kleinere Modelle (z.B. Llama 3 8B): 8192
+# - Größere Modelle (z.B. Qwen 2.5 14B): 32768
+# - Reasoning-Modelle (z.B. mistralai/ministral-3-14b-reasoning): 262144
+MAX_CONTEXT_TOKENS = 262144
 ```
 
 ### 4. Tesseract OCR Installation (für gescannte PDFs)
@@ -214,6 +222,41 @@ MIN_IMAGE_SIZE = 10 * 1024  # 10 KB
 
 ## Verwendung
 
+### Kommandozeilenparameter
+
+FileInventory unterstützt folgende Kommandozeilenparameter:
+
+```bash
+# Hilfe anzeigen
+python3 FileInventory.py -h
+python3 FileInventory.py --help
+
+# Version anzeigen
+python3 FileInventory.py --version
+
+# Mit benutzerdefinierten Verzeichnissen
+python3 FileInventory.py --src ~/Documents --dst ~/Summaries
+
+# Kleineres Modell mit 8k Token Context
+python3 FileInventory.py --max-tokens 8192
+
+# Vollständig benutzerdefiniert
+python3 FileInventory.py --src ~/Docs --dst ~/Summaries --max-tokens 32768
+
+# Standard-Verzeichnisse und -Einstellungen verwenden
+python3 FileInventory.py
+```
+
+**Verfügbare Parameter:**
+
+| Parameter | Beschreibung | Standard |
+|-----------|--------------|----------|
+| `-h`, `--help` | Zeigt Hilfe und alle verfügbaren Optionen | - |
+| `--version` | Zeigt Versionsinformation | - |
+| `--src VERZEICHNIS` | Quellverzeichnis für Dokumente | `~/OneDrive - Marc König Unternehmensberatung` |
+| `--dst VERZEICHNIS` | Zielverzeichnis für JSON-Dateien | `~/LLM` |
+| `--max-tokens TOKENS` | Maximale Context-Länge des Modells in Tokens | `262144` |
+
 ### Basis-Ausführung
 
 ```bash
@@ -225,6 +268,9 @@ python3 FileInventory.py
 
 # Ohne virtuelle Umgebung
 python3 FileInventory.py
+
+# Mit benutzerdefinierten Verzeichnissen
+python3 FileInventory.py --src ~/Documents --dst ~/Summaries
 ```
 
 ### Interaktive Steuerung während der Ausführung
@@ -393,16 +439,29 @@ Das System verwendet einen spezialisierten RAG-Ansatz (Retrieval-Augmented Gener
 
 ### Adaptive Context-Verwaltung
 
-Bei Context/Token-Overflow-Fehlern reduziert das System automatisch die Textlänge:
+Das System berechnet automatisch die optimale Textlänge basierend auf `MAX_CONTEXT_TOKENS`:
 
+**Beispiel für MAX_CONTEXT_TOKENS = 262144 (ministral-3-14b-reasoning):**
 ```
-Versuch 1: 30.000 Zeichen (~7.500 Tokens)
-Versuch 2: 20.000 Zeichen (~5.000 Tokens)
-Versuch 3: 14.000 Zeichen (~3.500 Tokens)
-Versuch 4: 10.000 Zeichen (~2.500 Tokens)
-Versuch 5:  6.000 Zeichen (~1.500 Tokens)
-Versuch 6:  3.000 Zeichen (~750 Tokens)
+Versuch 1: 1.044.576 Zeichen (~261.000 Tokens) - Nutzt fast vollen Context
+Versuch 2:   699.666 Zeichen (~175.000 Tokens) - 67% des Max-Context
+Versuch 3:   490.951 Zeichen (~123.000 Tokens) - 47% des Max-Context
+Versuch 4:   344.710 Zeichen  (~86.000 Tokens) - 33% des Max-Context
+Versuch 5:   208.915 Zeichen  (~52.000 Tokens) - 20% des Max-Context
+Versuch 6:     3.000 Zeichen     (~750 Tokens) - Minimum-Fallback
 ```
+
+**Beispiel für MAX_CONTEXT_TOKENS = 8192 (kleinere Modelle):**
+```
+Versuch 1: 28.768 Zeichen (~7.200 Tokens)
+Versuch 2: 19.274 Zeichen (~4.800 Tokens)
+Versuch 3: 13.520 Zeichen (~3.400 Tokens)
+Versuch 4:  9.493 Zeichen (~2.400 Tokens)
+Versuch 5:  5.753 Zeichen (~1.400 Tokens)
+Versuch 6:  3.000 Zeichen   (~750 Tokens)
+```
+
+**Annahme**: ~4 Zeichen pro Token (konservativ für deutsche Texte)
 
 **Verbesserte Fehlerkennung**: Das System erkennt Context-Fehler anhand der Keywords "context", "token" oder "length" in der Fehlermeldung.
 
@@ -578,6 +637,53 @@ top_keywords = Counter(all_keywords).most_common(10)
 ---
 
 ## Versionsverlauf
+
+### Version 1.7.1 (2025-12-25)
+- **Neu**: `--max-tokens TOKENS` Parameter für dynamische Context-Länge
+- **Verbessert**: MAX_CONTEXT_TOKENS kann per Kommandozeile überschrieben werden
+- **Verbessert**: Erweiterte Hilfe mit Beispielen für verschiedene Modellgrößen
+- **Optimiert**: Flexible Anpassung an verschiedene LLM-Modelle ohne Code-Änderung
+
+### Version 1.7.0 (2025-12-25)
+- **Neu**: Professionelle Kommandozeilenparameter-Unterstützung mit argparse
+- **Neu**: `-h` / `--help` zeigt Hilfe und alle verfügbaren Optionen
+- **Neu**: `--version` zeigt Versionsinformation an
+- **Neu**: `--src VERZEICHNIS` für benutzerdefiniertes Quellverzeichnis
+- **Neu**: `--dst VERZEICHNIS` für benutzerdefiniertes Zielverzeichnis
+- **Verbessert**: Detaillierte Hilfe mit Beispielen und Konfigurationshinweisen
+- **Dokumentiert**: Alle Parameter in der README mit Beispielen
+
+### Version 1.6.8 (2025-12-25)
+- **Neu**: Konfigurierbare MAX_CONTEXT_TOKENS für unterschiedliche Modellgrößen
+- **Neu**: Automatische Berechnung der retry_lengths basierend auf Modell-Context
+- **Verbessert**: Unterstützung für große Context-Fenster (bis 262k Tokens)
+- **Getestet**: Erfolgreich mit mistralai/ministral-3-14b-reasoning (262k Tokens)
+- **Optimiert**: Bessere Nutzung der verfügbaren Context-Länge
+
+### Version 1.6.7 (2025-12-25)
+- **Neu**: OCR-Funktionalitätsprüfung beim Programmstart mit detailliertem Status
+- **Neu**: Prüfung ob Tesseract installiert ist und deutsche Sprache verfügbar ist
+- **Fix**: OCR_AVAILABLE als globale Variable - behebt "name 'ocr_available' is not defined" Fehler
+- **Verbessert**: Klare Warnung beim Start wenn OCR nicht verfügbar ist
+- **Verbessert**: Anzeige der Tesseract-Version und Sprachunterstützung
+
+### Version 1.6.6 (2025-12-25)
+- **Verbessert**: Deutlich verbesserte Fehlermeldung für gescannte PDFs ohne OCR-Unterstützung
+- **Verbessert**: Zeigt Installationsanweisungen für Tesseract OCR an (macOS, Linux, Python)
+- **Verbessert**: Klar abgegrenzte Warnung mit Erklärung warum Datei übersprungen wird
+- **Fix**: Benutzer werden jetzt direkt informiert dass OCR-Installation benötigt wird
+
+### Version 1.6.5 (2025-12-25)
+- **Fix**: Keyword-Extraktion funktioniert jetzt korrekt mit "Schlüsselbegriffe:", "Keywords:" Markern
+- **Verbessert**: Robuste Regex-basierte Keyword-Erkennung mit mehreren Fallback-Optionen
+- **Verbessert**: Keywords werden auch bei längeren Zeilen (>200 Zeichen) korrekt extrahiert
+- **Verbessert**: Automatisches Entfernen der Keyword-Zeile aus der Zusammenfassung
+
+### Version 1.6.4 (2025-12-25)
+- **Fix**: OCR-Zähler funktioniert jetzt auch bei übersprungenen (bereits verarbeiteten) Dateien
+- **Verbessert**: Prompts optimiert - kein Markdown, keine Meta-Begriffe wie "Zusammenfassung" oder "Diese Datei enthält"
+- **Verbessert**: System-Prompt fordert reinen Fließtext ohne Formatierung
+- **Verbessert**: Direkter Einstieg in Inhalte ohne Einleitungen
 
 ### Version 1.6.3 (2025-12-25)
 - **Fix**: OCR-Zähler wird jetzt korrekt aktualisiert (auch bei bereits verarbeiteten Dateien)

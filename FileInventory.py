@@ -11,12 +11,13 @@ from datetime import datetime
 import select
 import sys
 import warnings
+import argparse
 
 # Unterdrücke openpyxl Warnungen für nicht unterstützte Excel-Features
 warnings.filterwarnings('ignore', category=UserWarning, module='openpyxl')
 
 # Version und Metadaten
-VERSION = "1.6.3"
+VERSION = "1.7.1"
 VERSION_DATE = "2025-12-25"
 SCRIPT_NAME = "FileInventory - OneDrive Dokumenten-Zusammenfassung (macOS)"
 
@@ -37,6 +38,13 @@ MODEL_NAME = "local-model"  # in LM Studio unter Model-Name des laufenden Server
 # Minimale Dateigröße für Bilddateien (in Bytes) - ignoriere kleine Icons
 MIN_IMAGE_SIZE = 10 * 1024  # 10 KB
 
+# Modell Context-Länge (maximale Anzahl Tokens)
+# Passen Sie dies an Ihr Modell an:
+# - Kleinere Modelle (z.B. Llama 3 8B): 8192
+# - Größere Modelle (z.B. Qwen 2.5 14B): 32768
+# - Reasoning-Modelle (z.B. mistralai/ministral-3-14b-reasoning): 262144
+MAX_CONTEXT_TOKENS = 262144
+
 # Welche Dateitypen sollen verarbeitet werden?
 EXTENSIONS = {
     ".pdf",                                    # PDF-Dokumente
@@ -46,6 +54,17 @@ EXTENSIONS = {
     ".txt", ".md",                            # Textdateien
     ".png", ".jpg", ".jpeg"                   # Bilddateien
 }
+
+# Prüfe OCR-Verfügbarkeit global (einmalig beim Start)
+OCR_AVAILABLE = False
+pytesseract = None
+PIL_Image = None
+try:
+    import pytesseract
+    from PIL import Image as PIL_Image
+    OCR_AVAILABLE = True
+except ImportError:
+    pass  # OCR nicht verfügbar
 
 def extract_text_pdf(path):
     """
@@ -69,17 +88,6 @@ def extract_text_pdf(path):
         'ocr_chars': 0
     }
 
-    # Prüfe OCR-Verfügbarkeit einmal am Anfang
-    ocr_available = False
-    pytesseract = None
-    Image = None
-    try:
-        import pytesseract
-        from PIL import Image
-        ocr_available = True
-    except ImportError:
-        pass  # OCR nicht verfügbar, wird bei Bedarf gemeldet
-
     try:
         with pdfplumber.open(path) as pdf:
             total_pages = len(pdf.pages)
@@ -92,7 +100,7 @@ def extract_text_pdf(path):
                 # Wenn keine oder sehr wenig Text gefunden wurde, könnte es ein Scan sein
                 if len(page_text.strip()) < 10:
                     # Versuche OCR mit pytesseract (falls verfügbar)
-                    if ocr_available:
+                    if OCR_AVAILABLE:
                         try:
                             # Konvertiere PDF-Seite zu Bild
                             if hasattr(page, 'to_image'):
@@ -340,7 +348,9 @@ Fasse den folgenden Dateiinhalt so zusammen, dass er für spätere Fragen maxima
 REGELN:
 - Maximal 1000 Zeichen
 - Sachlich, präzise, ohne Floskeln
-- Keine Meta-Kommentare (z. B. „Diese Datei beschreibt…")
+- Keine Meta-Kommentare (z. B. „Diese Datei beschreibt…", „Zusammenfassung:", „Das Dokument enthält…")
+- Keine Markdown-Formatierung (**, ##, -, etc.)
+- Nur reiner Fließtext ohne Überschriften oder Listen
 - Nutze klare, informationsdichte Sätze
 - Behalte wichtige Fachbegriffe, Zahlen, Technologien und Personennamen
 - Beschreibe Zweck, Inhalt, Kontext und Besonderheiten
@@ -348,13 +358,13 @@ REGELN:
 
 STRUKTUR (fließender Text ohne Überschriften):
 - Worum geht es?
-- Wozu dient die Datei?
+- Wozu dient es?
 - Welche Inhalte/Daten/Logik sind enthalten?
-- Was macht sie besonders oder relevant?
+- Was macht es besonders oder relevant?
 
 Abschließend: Kommagetrennte Liste zentraler Schlüsselbegriffe.
 
-WICHTIG: Antworte AUF DEUTSCH."""
+WICHTIG: Antworte AUF DEUTSCH. Beginne direkt mit dem Inhalt, ohne Einleitung."""
 
     # Dateityp-spezifische Ergänzungen
     type_specific = {
@@ -449,8 +459,20 @@ def summarize_with_lmstudio(text, file_path=None, file_ext=None, max_chars=30000
         raise ValueError("Text ist leer nach Bereinigung")
 
     # Versuche mit verschiedenen Textlängen, falls Context zu groß ist
-    # Reasoning-Modelle können mehr Text verarbeiten
-    retry_lengths = [30000, 20000, 14000, 10000, 6000, 3000]
+    # Berechne retry_lengths basierend auf MAX_CONTEXT_TOKENS
+    # Annahme: ~4 Zeichen pro Token (konservativ für deutsche Texte)
+    chars_per_token = 4
+    max_chars = (MAX_CONTEXT_TOKENS - 1000) * chars_per_token  # Reserve 1000 Tokens für Prompt und Antwort
+
+    # Erstelle Retry-Liste mit absteigenden Werten
+    retry_lengths = [
+        max_chars,
+        int(max_chars * 0.67),  # 2/3
+        int(max_chars * 0.47),  # ~1/2
+        int(max_chars * 0.33),  # 1/3
+        int(max_chars * 0.20),  # 1/5
+        3000  # Minimum-Fallback
+    ]
 
     # Hole dateityp-spezifischen Prompt
     user_prompt = get_prompt_for_filetype(file_ext) if file_ext else get_prompt_for_filetype("")
@@ -463,7 +485,7 @@ def summarize_with_lmstudio(text, file_path=None, file_ext=None, max_chars=30000
             "messages": [
                 {
                     "role": "system",
-                    "content": "Du bist ein Wissensextraktionssystem für semantische Suche. Erstelle informationsdichte Zusammenfassungen ohne Meta-Kommentare oder Formatierung. Fokussiere auf Fakten, Zahlen, Namen und Fachbegriffe."
+                    "content": "Du bist ein Wissensextraktionssystem für semantische Suche. Erstelle informationsdichte Zusammenfassungen in reinem Fließtext ohne Meta-Kommentare (z.B. 'Zusammenfassung:', 'Diese Datei...'), ohne Markdown-Formatierung (**, ##, -) und ohne Überschriften. Fokussiere auf Fakten, Zahlen, Namen und Fachbegriffe. Beginne direkt mit dem Inhalt."
                 },
                 {
                     "role": "user",
@@ -610,7 +632,22 @@ def process_file(src_file):
         return None
 
     if not is_image and not text.strip():
-        print("Kein Text extrahiert, überspringe:", src_file)
+        # Prüfe ob das Problem fehlende OCR-Unterstützung ist
+        if ocr_info and not ocr_info.get('used_ocr') and not OCR_AVAILABLE:
+            # Dies ist wahrscheinlich eine gescannte PDF ohne verfügbares OCR
+            print("!" * 70)
+            print("ÜBERSPRUNGEN: Gescannte PDF ohne OCR-Unterstützung")
+            print("!" * 70)
+            print(f"Datei: {src_file}")
+            print("\nDiese Datei scheint gescannten Text zu enthalten und benötigt OCR.")
+            print("OCR ist nicht verfügbar (pytesseract/Tesseract nicht installiert).")
+            print("\nInstallation:")
+            print("  macOS:  brew install tesseract tesseract-lang")
+            print("  Linux:  sudo apt-get install tesseract-ocr tesseract-ocr-deu")
+            print("  Python: pip install pytesseract pillow")
+            print("!" * 70)
+        else:
+            print("Kein Text extrahiert, überspringe:", src_file)
         return None
 
     if not is_image:
@@ -655,18 +692,42 @@ def process_file(src_file):
     keywords = []
     summary_text = summary
 
-    # Versuche, Schlüsselbegriffe zu extrahieren (nach dem letzten Punkt oder Newline)
-    # Suche nach kommagetrennten Begriffen am Ende
-    lines = summary.strip().split('\n')
-    if len(lines) > 1:
-        # Letzte Zeile könnte die Keywords enthalten
-        last_line = lines[-1].strip()
-        # Prüfe ob die letzte Zeile hauptsächlich aus kommagetrennten Wörtern besteht
-        if ',' in last_line and len(last_line) < 200:  # Keywords sind typischerweise kürzer
-            # Extrahiere Keywords
-            keywords = [kw.strip() for kw in last_line.split(',') if kw.strip()]
-            # Entferne die Keyword-Zeile aus der Zusammenfassung
-            summary_text = '\n'.join(lines[:-1]).strip()
+    # Suche nach Keyword-Markern wie "Schlüsselbegriffe:", "Keywords:", etc.
+    import re
+
+    # Muster für verschiedene Keyword-Marker (auch mit Absatz/Newline davor)
+    keyword_patterns = [
+        r'\n\s*Schlüsselbegriffe:\s*(.+?)$',
+        r'\n\s*Keywords?:\s*(.+?)$',
+        r'\n\s*Zentrale Begriffe:\s*(.+?)$',
+        # Fallback: Suche auch ohne Newline am Anfang
+        r'Schlüsselbegriffe:\s*(.+?)$',
+        r'Keywords?:\s*(.+?)$',
+    ]
+
+    for pattern in keyword_patterns:
+        match = re.search(pattern, summary, re.IGNORECASE | re.MULTILINE)
+        if match:
+            keyword_string = match.group(1).strip()
+            # Extrahiere kommagetrennte Keywords
+            if ',' in keyword_string:
+                keywords = [kw.strip() for kw in keyword_string.split(',') if kw.strip()]
+                # Entferne die Keyword-Zeile aus der Zusammenfassung
+                summary_text = re.sub(pattern, '', summary, flags=re.IGNORECASE | re.MULTILINE).strip()
+                break
+
+    # Fallback: Wenn keine Keywords gefunden wurden, versuche letzte Zeile
+    if not keywords:
+        lines = summary.strip().split('\n')
+        if len(lines) > 1:
+            # Letzte Zeile könnte die Keywords enthalten
+            last_line = lines[-1].strip()
+            # Prüfe ob die letzte Zeile hauptsächlich aus kommagetrennten Wörtern besteht
+            if ',' in last_line and len(last_line) < 300:
+                # Extrahiere Keywords
+                keywords = [kw.strip() for kw in last_line.split(',') if kw.strip()]
+                # Entferne die Keyword-Zeile aus der Zusammenfassung
+                summary_text = '\n'.join(lines[:-1]).strip()
 
     metadata = {
         "path": rel_path,
@@ -847,6 +908,34 @@ def check_lmstudio_connection():
     except requests.exceptions.RequestException:
         return False
 
+def check_ocr_functionality():
+    """
+    Prüft ob OCR (Tesseract) korrekt installiert und funktionsfähig ist.
+    Returns: (is_available, error_message)
+    """
+    if not OCR_AVAILABLE:
+        return False, "pytesseract oder Pillow nicht installiert"
+
+    try:
+        # Versuche tesseract Version zu prüfen
+        version = pytesseract.get_tesseract_version()
+
+        # Prüfe ob deutsche Sprache verfügbar ist
+        try:
+            langs = pytesseract.get_languages()
+            if 'deu' not in langs:
+                return True, f"Tesseract {version} verfügbar, aber deutsche Sprache 'deu' fehlt"
+        except:
+            # Wenn get_languages fehlschlägt, gehen wir davon aus dass es funktioniert
+            pass
+
+        return True, f"Tesseract {version} mit deutscher Sprache verfügbar"
+
+    except pytesseract.TesseractNotFoundError:
+        return False, "Tesseract Binary nicht gefunden (nicht installiert oder nicht im PATH)"
+    except Exception as e:
+        return False, f"OCR-Fehler: {str(e)}"
+
 def format_time(seconds):
     """Formatiert Sekunden in h:mm:ss Format."""
     hours = int(seconds // 3600)
@@ -891,6 +980,19 @@ def walk_and_process():
         print("=" * 70)
         return
     print("✓ LM Studio verbunden")
+
+    # Prüfe OCR-Funktionalität
+    print("\nPrüfe OCR-Funktionalität (Tesseract)...")
+    ocr_ok, ocr_message = check_ocr_functionality()
+    if ocr_ok:
+        print(f"✓ {ocr_message}")
+    else:
+        print(f"⚠ OCR nicht verfügbar: {ocr_message}")
+        print("  Hinweis: Gescannte PDFs werden übersprungen.")
+        print("  Installation:")
+        print("    macOS:  brew install tesseract tesseract-lang")
+        print("    Linux:  sudo apt-get install tesseract-ocr tesseract-ocr-deu")
+        print("    Python: pip install pytesseract pillow")
 
     # Zähle zunächst alle zu verarbeitenden Dateien mit Fortschrittsanzeige
     print("\nScanne Verzeichnis...")
@@ -1023,6 +1125,13 @@ def walk_and_process():
             if os.path.exists(dst_file):
                 if validate_json_file(dst_file):
                     skipped += 1
+                    # Lese OCR-Info aus existierender JSON-Datei für Statistik
+                    try:
+                        with open(dst_file, 'r', encoding='utf-8') as f:
+                            existing_data = json.load(f)
+                            ocr_info = existing_data.get('ocr_info', None)
+                    except:
+                        pass
                 else:
                     # Fehlerhafte Datei wird in process_file gelöscht und neu erstellt
                     ocr_info = process_file(full_path)
@@ -1079,5 +1188,87 @@ def walk_and_process():
         print(f"Durchschnitt: {total_time/actually_processed:.2f}s pro Datei (nur verarbeitete)")
     print("=" * 70)
 
+def parse_arguments():
+    """Parse und validiere Kommandozeilenargumente."""
+    parser = argparse.ArgumentParser(
+        description=f'{SCRIPT_NAME} - Version {VERSION}',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=f"""
+Beispiele:
+  {sys.argv[0]}
+    Verwendet Standard-Verzeichnisse und -Einstellungen
+
+  {sys.argv[0]} --src ~/Documents --dst ~/Summaries
+    Verwendet benutzerdefinierte Verzeichnisse
+
+  {sys.argv[0]} --max-tokens 8192
+    Verwendet kleineres Modell mit 8k Tokens Context
+
+  {sys.argv[0]} --src ~/Docs --dst ~/Summaries --max-tokens 32768
+    Vollständig benutzerdefinierte Konfiguration
+
+  {sys.argv[0]} --version
+    Zeigt Versionsinformation an
+
+Konfiguration:
+  Die Standardwerte können in der Datei direkt angepasst werden:
+    SRC_ROOT = "~/OneDrive - Marc König Unternehmensberatung"
+    DST_ROOT = "~/LLM"
+    MAX_CONTEXT_TOKENS = 262144
+
+Empfohlene MAX_CONTEXT_TOKENS Werte:
+  - Kleinere Modelle (z.B. Llama 3 8B): 8192
+  - Größere Modelle (z.B. Qwen 2.5 14B): 32768
+  - Reasoning-Modelle (z.B. ministral-3-14b-reasoning): 262144
+
+Weitere Informationen:
+  Siehe README.md für detaillierte Dokumentation
+        """
+    )
+
+    parser.add_argument(
+        '--src',
+        type=str,
+        help=f'Quellverzeichnis (Standard: {SRC_ROOT})'
+    )
+
+    parser.add_argument(
+        '--dst',
+        type=str,
+        help=f'Zielverzeichnis für JSON-Dateien (Standard: {DST_ROOT})'
+    )
+
+    parser.add_argument(
+        '--max-tokens',
+        type=int,
+        metavar='TOKENS',
+        help=f'Maximale Context-Länge des Modells in Tokens (Standard: {MAX_CONTEXT_TOKENS})'
+    )
+
+    parser.add_argument(
+        '--version',
+        action='version',
+        version=f'{SCRIPT_NAME}\nVersion: {VERSION}\nDatum: {VERSION_DATE}'
+    )
+
+    return parser.parse_args()
+
 if __name__ == "__main__":
+    # Parse Kommandozeilenargumente
+    args = parse_arguments()
+
+    # Überschreibe globale Variablen falls Parameter angegeben wurden
+    if args.src:
+        SRC_ROOT = os.path.expanduser(args.src)
+        # Aktualisiere die globale Variable
+        globals()['SRC_ROOT'] = SRC_ROOT
+    if args.dst:
+        DST_ROOT = os.path.expanduser(args.dst)
+        # Aktualisiere die globale Variable
+        globals()['DST_ROOT'] = DST_ROOT
+    if args.max_tokens:
+        MAX_CONTEXT_TOKENS = args.max_tokens
+        # Aktualisiere die globale Variable
+        globals()['MAX_CONTEXT_TOKENS'] = MAX_CONTEXT_TOKENS
+
     walk_and_process()

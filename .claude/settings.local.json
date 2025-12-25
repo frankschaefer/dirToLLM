@@ -3,7 +3,9 @@
     "allow": [
       "Bash(curl:*)",
       "Bash(python -m py_compile:*)",
-      "Bash(python3:*)"
+      "Bash(python3:*)",
+      "Bash(cat:*)",
+      "Bash(find:*)"
     ]
   }
 }
