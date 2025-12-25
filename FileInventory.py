@@ -16,9 +16,12 @@ import warnings
 warnings.filterwarnings('ignore', category=UserWarning, module='openpyxl')
 
 # Version und Metadaten
-VERSION = "1.3.8"
+VERSION = "1.5.1"
 VERSION_DATE = "2025-12-25"
 SCRIPT_NAME = "FileInventory - OneDrive Dokumenten-Zusammenfassung (macOS)"
+
+# Fehlerbehandlungsmodus: None = fragen, "skip" = weiter ohne Fragen, "ask" = weiter mit Fragen
+ERROR_HANDLING_MODE = None
 
 # macOS Pfade - expandiere ~ zum Home-Verzeichnis
 SRC_ROOT = os.path.expanduser("~/OneDrive - Marc König Unternehmensberatung")
@@ -45,11 +48,89 @@ EXTENSIONS = {
 }
 
 def extract_text_pdf(path):
+    """
+    Extrahiert Text aus PDF-Dateien.
+    Verwendet OCR (Tesseract) für gescannte PDFs ohne Text.
+
+    Returns:
+        tuple: (text, ocr_info) wobei ocr_info ein dict ist mit:
+            - 'used_ocr': Boolean, ob OCR verwendet wurde
+            - 'ocr_pages': Anzahl der Seiten mit OCR
+            - 'total_pages': Gesamtzahl der Seiten
+            - 'ocr_chars': Anzahl der via OCR extrahierten Zeichen
+    """
     texts = []
-    with pdfplumber.open(path) as pdf:
-        for page in pdf.pages:
-            texts.append(page.extract_text() or "")
-    return "\n\n".join(texts)
+    ocr_pages = 0
+    total_ocr_chars = 0
+    ocr_info = {
+        'used_ocr': False,
+        'ocr_pages': 0,
+        'total_pages': 0,
+        'ocr_chars': 0
+    }
+
+    try:
+        with pdfplumber.open(path) as pdf:
+            total_pages = len(pdf.pages)
+            ocr_info['total_pages'] = total_pages
+
+            # Verarbeite jede Seite
+            for page_num, page in enumerate(pdf.pages, 1):
+                page_text = page.extract_text() or ""
+
+                # Wenn keine oder sehr wenig Text gefunden wurde, könnte es ein Scan sein
+                if len(page_text.strip()) < 10:
+                    # Versuche OCR mit pytesseract
+                    try:
+                        import pytesseract
+                        from PIL import Image
+                        import io
+
+                        # Konvertiere PDF-Seite zu Bild
+                        if hasattr(page, 'to_image'):
+                            pil_image = page.to_image(resolution=300).original
+
+                            # OCR mit Tesseract (Deutsch)
+                            ocr_text = pytesseract.image_to_string(pil_image, lang='deu')
+
+                            if len(ocr_text.strip()) > len(page_text.strip()):
+                                page_text = ocr_text
+                                ocr_pages += 1
+                                total_ocr_chars += len(ocr_text)
+                                ocr_info['used_ocr'] = True
+
+                                if page_num == 1:
+                                    print(f"  → OCR verwendet für Seite {page_num}/{total_pages}")
+
+                    except ImportError:
+                        # pytesseract nicht installiert
+                        if page_num == 1:
+                            print(f"  → Warnung: OCR nicht verfügbar (pytesseract nicht installiert)")
+                    except Exception as e:
+                        # OCR fehlgeschlagen, verwende ursprünglichen Text
+                        if page_num == 1:
+                            print(f"  → OCR-Fehler auf Seite {page_num}: {str(e)[:50]}")
+
+                texts.append(page_text)
+
+                # Zeige Fortschritt bei vielen Seiten
+                if total_pages > 10 and page_num % 10 == 0:
+                    print(f"  → PDF-Verarbeitung: {page_num}/{total_pages} Seiten")
+
+    except Exception as e:
+        print(f"  → Fehler beim PDF-Öffnen: {e}")
+        return "", ocr_info
+
+    result = "\n\n".join(texts)
+
+    # Update OCR Info
+    ocr_info['ocr_pages'] = ocr_pages
+    ocr_info['ocr_chars'] = total_ocr_chars
+
+    if ocr_info['used_ocr'] and len(result.strip()) > 100:
+        print(f"  → OCR Ergebnis: {ocr_pages}/{total_pages} Seiten mit OCR verarbeitet, {total_ocr_chars:,} Zeichen extrahiert")
+
+    return result, ocr_info
 
 def extract_text_docx(path):
     """Extrahiert Text aus Word-Dokumenten (.docx)."""
@@ -197,29 +278,35 @@ def extract_text_image(path):
     return f"[IMAGE_FILE:{path}]"
 
 def extract_text(path):
+    """
+    Extrahiert Text aus einer Datei.
+
+    Returns:
+        tuple: (text, ocr_info) wobei ocr_info None ist für nicht-PDF Dateien
+    """
     ext = path.suffix.lower()
     if ext == ".pdf":
-        return extract_text_pdf(path)
+        return extract_text_pdf(path)  # Gibt (text, ocr_info) zurück
     elif ext == ".docx":
-        return extract_text_docx(path)
+        return extract_text_docx(path), None
     elif ext == ".doc":
-        return extract_text_doc(path)
+        return extract_text_doc(path), None
     elif ext == ".pptx":
-        return extract_text_pptx(path)
+        return extract_text_pptx(path), None
     elif ext == ".ppt":
-        return extract_text_ppt(path)
+        return extract_text_ppt(path), None
     elif ext in {".xlsx", ".xlsm", ".xltx"}:
-        return extract_text_xlsx(path)
+        return extract_text_xlsx(path), None
     elif ext == ".xls":
-        return extract_text_xls(path)
+        return extract_text_xls(path), None
     elif ext == ".txt":
-        return extract_text_txt(path)
+        return extract_text_txt(path), None
     elif ext == ".md":
-        return extract_text_md(path)
+        return extract_text_md(path), None
     elif ext in {".png", ".jpg", ".jpeg"}:
-        return extract_text_image(path)
+        return extract_text_image(path), None
     else:
-        return ""
+        return "", None
 
 def is_file_accessible(file_path):
     """
@@ -235,22 +322,22 @@ def is_file_accessible(file_path):
 def get_prompt_for_filetype(file_ext):
     """Gibt einen dateityp-spezifischen Prompt zurück."""
     prompts = {
-        ".pdf": "Erstelle eine präzise Zusammenfassung dieses PDF-Dokuments in maximal 650 Zeichen als reinen Fließtext ohne Markdown-Formatierung. Bevorzuge die Nennung von Personennamen mit ihrem Kontext (Rolle, Funktion, Beziehung). Erfasse wichtigste Inhalte, Themen und Kernaussagen. Verwende keine Aufzählungszeichen, Sternchen, Hashtags oder andere Formatierungszeichen.",
-        ".docx": "Erstelle eine präzise Zusammenfassung dieses Word-Dokuments in maximal 650 Zeichen als reinen Fließtext ohne Markdown-Formatierung. Bevorzuge die Nennung von Personennamen mit ihrem Kontext (Rolle, Funktion, Beziehung). Erfasse wichtigste Inhalte, Themen und Kernaussagen. Verwende keine Aufzählungszeichen, Sternchen, Hashtags oder andere Formatierungszeichen.",
-        ".doc": "Erstelle eine präzise Zusammenfassung dieses Word-Dokuments in maximal 650 Zeichen als reinen Fließtext ohne Markdown-Formatierung. Bevorzuge die Nennung von Personennamen mit ihrem Kontext (Rolle, Funktion, Beziehung). Erfasse wichtigste Inhalte, Themen und Kernaussagen. Verwende keine Aufzählungszeichen, Sternchen, Hashtags oder andere Formatierungszeichen.",
-        ".pptx": "Erstelle eine präzise Zusammenfassung dieser PowerPoint-Präsentation in maximal 650 Zeichen als reinen Fließtext ohne Markdown-Formatierung. Bevorzuge die Nennung von Personennamen mit ihrem Kontext (Rolle, Funktion). Erfasse Hauptthemen, wichtigste Folieninhalte und zentrale Botschaften. Verwende keine Aufzählungszeichen, Sternchen, Hashtags oder andere Formatierungszeichen.",
-        ".ppt": "Erstelle eine präzise Zusammenfassung dieser PowerPoint-Präsentation in maximal 650 Zeichen als reinen Fließtext ohne Markdown-Formatierung. Bevorzuge die Nennung von Personennamen mit ihrem Kontext (Rolle, Funktion). Erfasse Hauptthemen, wichtigste Folieninhalte und zentrale Botschaften. Verwende keine Aufzählungszeichen, Sternchen, Hashtags oder andere Formatierungszeichen.",
-        ".xlsx": "Erstelle eine präzise Zusammenfassung dieser Excel-Datei in maximal 650 Zeichen als reinen Fließtext ohne Markdown-Formatierung. Nenne relevante Personennamen falls vorhanden (mit Kontext). Beschreibe die Art der Daten, wichtige Kategorien und den Zweck der Tabelle. Verwende keine Aufzählungszeichen, Sternchen, Hashtags oder andere Formatierungszeichen.",
-        ".xls": "Erstelle eine präzise Zusammenfassung dieser Excel-Datei in maximal 650 Zeichen als reinen Fließtext ohne Markdown-Formatierung. Nenne relevante Personennamen falls vorhanden (mit Kontext). Beschreibe die Art der Daten, wichtige Kategorien und den Zweck der Tabelle. Verwende keine Aufzählungszeichen, Sternchen, Hashtags oder andere Formatierungszeichen.",
-        ".xlsm": "Erstelle eine präzise Zusammenfassung dieser Excel-Datei mit Makros in maximal 650 Zeichen als reinen Fließtext ohne Markdown-Formatierung. Nenne relevante Personennamen falls vorhanden (mit Kontext). Beschreibe die Art der Daten, wichtige Kategorien und den Zweck der Tabelle. Verwende keine Aufzählungszeichen, Sternchen, Hashtags oder andere Formatierungszeichen.",
-        ".xltx": "Erstelle eine präzise Zusammenfassung dieser Excel-Vorlage in maximal 650 Zeichen als reinen Fließtext ohne Markdown-Formatierung. Nenne relevante Personennamen falls vorhanden (mit Kontext). Beschreibe die Art der Daten, wichtige Kategorien und den Zweck der Vorlage. Verwende keine Aufzählungszeichen, Sternchen, Hashtags oder andere Formatierungszeichen.",
-        ".txt": "Erstelle eine präzise Zusammenfassung dieser Textdatei in maximal 650 Zeichen als reinen Fließtext ohne Markdown-Formatierung. Bevorzuge die Nennung von Personennamen mit ihrem Kontext (Rolle, Funktion, Beziehung). Erfasse wichtigste Informationen und den Zweck des Dokuments. Verwende keine Aufzählungszeichen, Sternchen, Hashtags oder andere Formatierungszeichen.",
-        ".md": "Erstelle eine präzise Zusammenfassung dieses Markdown-Dokuments in maximal 650 Zeichen als reinen Fließtext ohne Markdown-Formatierung. Bevorzuge die Nennung von Personennamen mit ihrem Kontext. Erfasse Struktur, Hauptthemen und wichtigste Inhalte. Verwende keine Aufzählungszeichen, Sternchen, Hashtags oder andere Formatierungszeichen.",
-        ".png": "Beschreibe dieses Bild in maximal 650 Zeichen als reinen Fließtext ohne Markdown-Formatierung. Nenne sichtbare Personennamen oder Personen mit ihrem Kontext. Erfasse was zu sehen ist, den Zweck des Bildes und wichtige Details wie Text, Diagramme oder Grafiken. Verwende keine Aufzählungszeichen, Sternchen, Hashtags oder andere Formatierungszeichen.",
-        ".jpg": "Beschreibe dieses Foto/Bild in maximal 650 Zeichen als reinen Fließtext ohne Markdown-Formatierung. Nenne sichtbare Personennamen oder abgebildete Personen mit ihrem Kontext. Erfasse was zu sehen ist, den Kontext und wichtige visuelle Elemente. Verwende keine Aufzählungszeichen, Sternchen, Hashtags oder andere Formatierungszeichen.",
-        ".jpeg": "Beschreibe dieses Foto/Bild in maximal 650 Zeichen als reinen Fließtext ohne Markdown-Formatierung. Nenne sichtbare Personennamen oder abgebildete Personen mit ihrem Kontext. Erfasse was zu sehen ist, den Kontext und wichtige visuelle Elemente. Verwende keine Aufzählungszeichen, Sternchen, Hashtags oder andere Formatierungszeichen."
+        ".pdf": "Erstelle eine präzise Zusammenfassung dieses PDF-Dokuments AUF DEUTSCH in maximal 650 Zeichen als reinen Fließtext ohne Markdown-Formatierung. Bevorzuge die Nennung von Personennamen mit ihrem Kontext (Rolle, Funktion, Beziehung). Erfasse wichtigste Inhalte, Themen und Kernaussagen. Verwende keine Aufzählungszeichen, Sternchen, Hashtags oder andere Formatierungszeichen.",
+        ".docx": "Erstelle eine präzise Zusammenfassung dieses Word-Dokuments AUF DEUTSCH in maximal 650 Zeichen als reinen Fließtext ohne Markdown-Formatierung. Bevorzuge die Nennung von Personennamen mit ihrem Kontext (Rolle, Funktion, Beziehung). Erfasse wichtigste Inhalte, Themen und Kernaussagen. Verwende keine Aufzählungszeichen, Sternchen, Hashtags oder andere Formatierungszeichen.",
+        ".doc": "Erstelle eine präzise Zusammenfassung dieses Word-Dokuments AUF DEUTSCH in maximal 650 Zeichen als reinen Fließtext ohne Markdown-Formatierung. Bevorzuge die Nennung von Personennamen mit ihrem Kontext (Rolle, Funktion, Beziehung). Erfasse wichtigste Inhalte, Themen und Kernaussagen. Verwende keine Aufzählungszeichen, Sternchen, Hashtags oder andere Formatierungszeichen.",
+        ".pptx": "Erstelle eine präzise Zusammenfassung dieser PowerPoint-Präsentation AUF DEUTSCH in maximal 650 Zeichen als reinen Fließtext ohne Markdown-Formatierung. Bevorzuge die Nennung von Personennamen mit ihrem Kontext (Rolle, Funktion). Erfasse Hauptthemen, wichtigste Folieninhalte und zentrale Botschaften. Verwende keine Aufzählungszeichen, Sternchen, Hashtags oder andere Formatierungszeichen.",
+        ".ppt": "Erstelle eine präzise Zusammenfassung dieser PowerPoint-Präsentation AUF DEUTSCH in maximal 650 Zeichen als reinen Fließtext ohne Markdown-Formatierung. Bevorzuge die Nennung von Personennamen mit ihrem Kontext (Rolle, Funktion). Erfasse Hauptthemen, wichtigste Folieninhalte und zentrale Botschaften. Verwende keine Aufzählungszeichen, Sternchen, Hashtags oder andere Formatierungszeichen.",
+        ".xlsx": "Erstelle eine präzise Zusammenfassung dieser Excel-Datei AUF DEUTSCH in maximal 650 Zeichen als reinen Fließtext ohne Markdown-Formatierung. Nenne relevante Personennamen falls vorhanden (mit Kontext). Beschreibe die Art der Daten, wichtige Kategorien und den Zweck der Tabelle. Verwende keine Aufzählungszeichen, Sternchen, Hashtags oder andere Formatierungszeichen.",
+        ".xls": "Erstelle eine präzise Zusammenfassung dieser Excel-Datei AUF DEUTSCH in maximal 650 Zeichen als reinen Fließtext ohne Markdown-Formatierung. Nenne relevante Personennamen falls vorhanden (mit Kontext). Beschreibe die Art der Daten, wichtige Kategorien und den Zweck der Tabelle. Verwende keine Aufzählungszeichen, Sternchen, Hashtags oder andere Formatierungszeichen.",
+        ".xlsm": "Erstelle eine präzise Zusammenfassung dieser Excel-Datei mit Makros AUF DEUTSCH in maximal 650 Zeichen als reinen Fließtext ohne Markdown-Formatierung. Nenne relevante Personennamen falls vorhanden (mit Kontext). Beschreibe die Art der Daten, wichtige Kategorien und den Zweck der Tabelle. Verwende keine Aufzählungszeichen, Sternchen, Hashtags oder andere Formatierungszeichen.",
+        ".xltx": "Erstelle eine präzise Zusammenfassung dieser Excel-Vorlage AUF DEUTSCH in maximal 650 Zeichen als reinen Fließtext ohne Markdown-Formatierung. Nenne relevante Personennamen falls vorhanden (mit Kontext). Beschreibe die Art der Daten, wichtige Kategorien und den Zweck der Vorlage. Verwende keine Aufzählungszeichen, Sternchen, Hashtags oder andere Formatierungszeichen.",
+        ".txt": "Erstelle eine präzise Zusammenfassung dieser Textdatei AUF DEUTSCH in maximal 650 Zeichen als reinen Fließtext ohne Markdown-Formatierung. Bevorzuge die Nennung von Personennamen mit ihrem Kontext (Rolle, Funktion, Beziehung). Erfasse wichtigste Informationen und den Zweck des Dokuments. Verwende keine Aufzählungszeichen, Sternchen, Hashtags oder andere Formatierungszeichen.",
+        ".md": "Erstelle eine präzise Zusammenfassung dieses Markdown-Dokuments AUF DEUTSCH in maximal 650 Zeichen als reinen Fließtext ohne Markdown-Formatierung. Bevorzuge die Nennung von Personennamen mit ihrem Kontext. Erfasse Struktur, Hauptthemen und wichtigste Inhalte. Verwende keine Aufzählungszeichen, Sternchen, Hashtags oder andere Formatierungszeichen.",
+        ".png": "Beschreibe dieses Bild AUF DEUTSCH in maximal 650 Zeichen als reinen Fließtext ohne Markdown-Formatierung. Nenne sichtbare Personennamen oder Personen mit ihrem Kontext. Erfasse was zu sehen ist, den Zweck des Bildes und wichtige Details wie Text, Diagramme oder Grafiken. Verwende keine Aufzählungszeichen, Sternchen, Hashtags oder andere Formatierungszeichen.",
+        ".jpg": "Beschreibe dieses Foto/Bild AUF DEUTSCH in maximal 650 Zeichen als reinen Fließtext ohne Markdown-Formatierung. Nenne sichtbare Personennamen oder abgebildete Personen mit ihrem Kontext. Erfasse was zu sehen ist, den Kontext und wichtige visuelle Elemente. Verwende keine Aufzählungszeichen, Sternchen, Hashtags oder andere Formatierungszeichen.",
+        ".jpeg": "Beschreibe dieses Foto/Bild AUF DEUTSCH in maximal 650 Zeichen als reinen Fließtext ohne Markdown-Formatierung. Nenne sichtbare Personennamen oder abgebildete Personen mit ihrem Kontext. Erfasse was zu sehen ist, den Kontext und wichtige visuelle Elemente. Verwende keine Aufzählungszeichen, Sternchen, Hashtags oder andere Formatierungszeichen."
     }
-    return prompts.get(file_ext, "Erstelle eine präzise Zusammenfassung in maximal 650 Zeichen als reinen Fließtext ohne Markdown-Formatierung. Bevorzuge die Nennung von Personennamen mit ihrem Kontext. Verwende keine Aufzählungszeichen, Sternchen, Hashtags oder andere Formatierungszeichen.")
+    return prompts.get(file_ext, "Erstelle eine präzise Zusammenfassung AUF DEUTSCH in maximal 650 Zeichen als reinen Fließtext ohne Markdown-Formatierung. Bevorzuge die Nennung von Personennamen mit ihrem Kontext. Verwende keine Aufzählungszeichen, Sternchen, Hashtags oder andere Formatierungszeichen.")
 
 def summarize_image_with_lmstudio(image_path, file_ext):
     """Analysiert ein Bild mit der Vision API von LM Studio."""
@@ -403,6 +490,12 @@ def summarize_with_lmstudio(text, file_path=None, file_ext=None, max_chars=30000
     raise ValueError("Zusammenfassung fehlgeschlagen nach allen Retry-Versuchen")
 
 def process_file(src_file):
+    """
+    Verarbeitet eine einzelne Datei und erstellt eine JSON-Zusammenfassung.
+
+    Returns:
+        dict: OCR-Informationen falls verfügbar, sonst None
+    """
     rel_path = os.path.relpath(src_file, SRC_ROOT)
     dst_dir = os.path.join(DST_ROOT, os.path.dirname(rel_path))
     os.makedirs(dst_dir, exist_ok=True)
@@ -414,14 +507,14 @@ def process_file(src_file):
     if os.path.exists(dst_file):
         if validate_json_file(dst_file):
             print("Überspringe (valide Summary existiert):", dst_file)
-            return
+            return None
         else:
             print("Lösche fehlerhafte JSON-Datei:", dst_file)
             try:
                 os.remove(dst_file)
             except Exception as e:
                 print(f"Fehler beim Löschen von {dst_file}: {e}")
-                return
+                return None
 
     path_obj = pathlib.Path(src_file)
     print("Verarbeite:", src_file)
@@ -429,7 +522,7 @@ def process_file(src_file):
     # Prüfe ob Datei zugänglich ist
     if not is_file_accessible(src_file):
         print(f"Überspringe Datei, da nicht zugänglich: {src_file}")
-        return
+        return None
 
     # Für Bilddateien: Prüfe Mindestgröße (ignoriere kleine Icons)
     file_ext = path_obj.suffix.lower()
@@ -438,23 +531,42 @@ def process_file(src_file):
             file_size = os.path.getsize(src_file)
             if file_size < MIN_IMAGE_SIZE:
                 print(f"Überspringe kleine Bilddatei ({file_size} Bytes < {MIN_IMAGE_SIZE} Bytes): {src_file}")
-                return
+                return None
         except OSError as e:
             print(f"Fehler beim Prüfen der Dateigröße: {e}")
-            return
+            return None
 
     try:
-        text = extract_text(path_obj)
+        result = extract_text(path_obj)
+        # Stelle sicher, dass wir ein Tuple bekommen
+        if isinstance(result, tuple) and len(result) == 2:
+            text, ocr_info = result
+        else:
+            # Fallback für unerwartetes Format
+            print(f"Unerwartetes Format von extract_text(): {type(result)}")
+            if isinstance(result, str):
+                text = result
+                ocr_info = None
+            else:
+                print(f"Fehler: Kann Text nicht extrahieren, unbekanntes Format: {result}")
+                return None
     except Exception as e:
         print(f"Fehler beim Extrahieren von Text aus {src_file}: {e}")
-        return
+        import traceback
+        traceback.print_exc()
+        return None
 
     # file_ext wurde bereits oben definiert (Zeile 425)
     is_image = file_ext in {".png", ".jpg", ".jpeg"}
 
+    # Stelle sicher, dass text ein String ist
+    if not isinstance(text, str):
+        print(f"Fehler: Text ist kein String sondern {type(text)}: {text}")
+        return None
+
     if not is_image and not text.strip():
         print("Kein Text extrahiert, überspringe:", src_file)
-        return
+        return None
 
     if not is_image:
         print(f"Text extrahiert: {len(text)} Zeichen")
@@ -463,19 +575,32 @@ def process_file(src_file):
         # Debug: Prüfe file_ext Typ
         if not isinstance(file_ext, str):
             print(f"FEHLER: file_ext hat falschen Typ: {type(file_ext)}, Wert: {file_ext}")
-            return
+            return None
 
         # Übergebe file_path und file_ext für dateityp-spezifische Verarbeitung
         summary = summarize_with_lmstudio(text, file_path=src_file, file_ext=file_ext)
+
+        # Zeige die ersten 100 Zeichen der Zusammenfassung
+        summary_preview = summary[:100] + "..." if len(summary) > 100 else summary
+        print(f"Zusammenfassung: {summary_preview}")
     except ValueError as e:
-        print(f"Validierungsfehler: {e}")
-        return
+        error_msg = f"Validierungsfehler: {e}"
+        action = ask_on_lmstudio_error(error_msg, src_file)
+        if action == "abort":
+            raise SystemExit("Verarbeitung durch Benutzer abgebrochen.")
+        return None
     except TypeError as e:
-        print(f"Typfehler: {e}")
-        return
+        error_msg = f"Typfehler: {e}"
+        action = ask_on_lmstudio_error(error_msg, src_file)
+        if action == "abort":
+            raise SystemExit("Verarbeitung durch Benutzer abgebrochen.")
+        return None
     except requests.exceptions.RequestException as e:
-        print(f"Netzwerkfehler bei der Zusammenfassung: {e}")
-        return
+        error_msg = f"Netzwerkfehler bei der Zusammenfassung: {e}"
+        action = ask_on_lmstudio_error(error_msg, src_file)
+        if action == "abort":
+            raise SystemExit("Verarbeitung durch Benutzer abgebrochen.")
+        return None
 
     # Sammle Datei-Metadaten
     stat = os.stat(src_file)
@@ -491,10 +616,16 @@ def process_file(src_file):
         "summary": summary
     }
 
+    # Füge OCR-Info hinzu falls verfügbar
+    if ocr_info and ocr_info.get('used_ocr'):
+        metadata['ocr_info'] = ocr_info
+
     with open(dst_file, "w", encoding="utf-8") as f:
         json.dump(metadata, f, ensure_ascii=False, indent=2)
 
     print(f"Summary erfolgreich erstellt: {dst_file}")
+
+    return ocr_info
 
 def validate_json_file(json_path):
     """
@@ -582,16 +713,63 @@ def ask_continue():
     print("\nBitte wählen Sie (J/N): ", end="", flush=True)
 
     while True:
-        choice = input().strip().lower()
+        choice = input().strip().upper()  # Konvertiere zu Großbuchstaben
 
-        if choice == 'j':
+        if choice == 'J':
             print("\nVerarbeitung wird fortgesetzt...\n")
             return True
-        elif choice == 'n':
+        elif choice == 'N':
             print("\nVerarbeitung wird abgebrochen. Vielen Dank!\n")
             return False
         else:
             print("Ungültige Eingabe. Bitte J oder N eingeben: ", end="", flush=True)
+
+def ask_on_lmstudio_error(error_message, file_path):
+    """
+    Fragt den Benutzer, wie bei LM Studio Fehlern verfahren werden soll.
+    Returns: 'abort', 'skip_prompts', oder 'continue'
+    """
+    global ERROR_HANDLING_MODE
+
+    # Wenn bereits eine Entscheidung getroffen wurde
+    if ERROR_HANDLING_MODE == "skip":
+        return "skip_prompts"
+    elif ERROR_HANDLING_MODE == "ask":
+        return "continue"
+
+    # Zeige professionelle Fehlermeldung
+    print("\n" + "=" * 80)
+    print("FEHLER BEI DER VERARBEITUNG")
+    print("=" * 80)
+    print(f"\nDatei: {os.path.basename(file_path)}")
+    print(f"Fehler: {error_message}")
+    print("\n" + "-" * 80)
+    print("\nWie möchten Sie fortfahren?")
+    print("\n  [A] Abbrechen - Verarbeitung sofort beenden")
+    print("  [W] Weiter ohne Fehlerabfragen - Weitere Fehler stillschweigend überspringen")
+    print("  [F] Weiter mit Fehlerabfragen - Bei jedem Fehler erneut nachfragen")
+    print("\n" + "-" * 80)
+    print("Bitte wählen Sie (A/W/F): ", end="", flush=True)
+
+    while True:
+        choice = input().strip().upper()  # Konvertiere zu Großbuchstaben
+
+        if choice == 'A':
+            print("\n→ Verarbeitung wird abgebrochen.\n")
+            print("=" * 80 + "\n")
+            return "abort"
+        elif choice == 'W':
+            print("\n→ Verarbeitung wird fortgesetzt. Weitere Fehler werden nicht mehr angezeigt.\n")
+            print("=" * 80 + "\n")
+            ERROR_HANDLING_MODE = "skip"
+            return "skip_prompts"
+        elif choice == 'F':
+            print("\n→ Verarbeitung wird fortgesetzt. Bei Fehlern erfolgt eine erneute Abfrage.\n")
+            print("=" * 80 + "\n")
+            ERROR_HANDLING_MODE = "ask"
+            return "continue"
+        else:
+            print("Ungültige Eingabe. Bitte A, W oder F eingeben: ", end="", flush=True)
 
 def check_lmstudio_connection():
     """
@@ -620,6 +798,11 @@ def format_time(seconds):
         return f"{secs}s"
 
 def walk_and_process():
+    global ERROR_HANDLING_MODE
+
+    # Setze Fehlerbehandlungsmodus zurück für neuen Durchlauf
+    ERROR_HANDLING_MODE = None
+
     # Zeige Version und Startinformationen
     print("=" * 70)
     print(f"{SCRIPT_NAME}")
@@ -746,6 +929,7 @@ def walk_and_process():
     skipped = 0
     errors = 0
     recreated = 0
+    ocr_count = 0  # Zähler für OCR-verarbeitete Dokumente
     start_time = time.time()
 
     for idx, full_path in enumerate(all_files, 1):
@@ -760,6 +944,7 @@ def walk_and_process():
                 print(f"Neu erstellt (vorher fehlerhaft): {recreated}")
                 print(f"Übersprungen (valide): {skipped}")
                 print(f"Fehler: {errors}")
+                print(f"Mit OCR verarbeitet: {ocr_count}")
                 elapsed = time.time() - start_time
                 print(f"Laufzeit bis Abbruch: {format_time(elapsed)}")
                 print("=" * 70)
@@ -771,31 +956,43 @@ def walk_and_process():
             dst_dir = os.path.join(DST_ROOT, os.path.dirname(rel_path))
             dst_file = os.path.join(dst_dir, os.path.basename(full_path) + ".json")
 
+            ocr_info = None
             if os.path.exists(dst_file):
                 if validate_json_file(dst_file):
                     skipped += 1
                 else:
                     # Fehlerhafte Datei wird in process_file gelöscht und neu erstellt
-                    process_file(full_path)
+                    ocr_info = process_file(full_path)
                     recreated += 1
             else:
-                process_file(full_path)
+                ocr_info = process_file(full_path)
                 processed += 1
+
+            # Zähle OCR-verarbeitete Dokumente
+            if ocr_info and ocr_info.get('used_ocr'):
+                ocr_count += 1
 
             # Berechne Zeitschätzung
             elapsed = time.time() - start_time
             if idx > 0:
-                avg_time_per_file = elapsed / idx
-                remaining_files = total_files - idx
-                estimated_remaining = avg_time_per_file * remaining_files
+                # Berechne Durchschnitt nur für tatsächlich verarbeitete Dateien
+                actually_processed = processed + recreated
+                if actually_processed > 0:
+                    avg_time_per_file = elapsed / actually_processed
+                    remaining_files = total_files - idx
+                    estimated_remaining = avg_time_per_file * remaining_files
 
-                print(f"\n[{idx}/{total_files}] Fortschritt: {(idx/total_files)*100:.1f}%")
-                print(f"Neu: {processed} | Neu erstellt: {recreated} | Übersprungen: {skipped} | Fehler: {errors}")
-                print(f"Verstrichene Zeit: {format_time(elapsed)}")
-                print(f"Geschätzte Restzeit: {format_time(estimated_remaining)}")
-                print(f"Geschätzte Gesamtzeit: {format_time(elapsed + estimated_remaining)}")
-                print(f"Durchschnitt: {avg_time_per_file:.2f}s pro Datei")
-                print("=" * 70)
+                    print(f"\n[{idx}/{total_files}] Fortschritt: {(idx/total_files)*100:.1f}%")
+                    print(f"Neu: {processed} | Neu erstellt: {recreated} | Übersprungen: {skipped} | Fehler: {errors} | OCR: {ocr_count}")
+                    print(f"Verstrichene Zeit: {format_time(elapsed)}")
+                    print(f"Geschätzte Restzeit: {format_time(estimated_remaining)}")
+                    print(f"Geschätzte Gesamtzeit: {format_time(elapsed + estimated_remaining)}")
+                    print(f"Durchschnitt: {avg_time_per_file:.2f}s pro Datei")
+                    print("=" * 70)
+                else:
+                    print(f"\n[{idx}/{total_files}] Fortschritt: {(idx/total_files)*100:.1f}%")
+                    print(f"Neu: {processed} | Neu erstellt: {recreated} | Übersprungen: {skipped} | Fehler: {errors} | OCR: {ocr_count}")
+                    print("=" * 70)
 
         except Exception as e:
             errors += 1
@@ -811,9 +1008,12 @@ def walk_and_process():
     print(f"Neu erstellt (vorher fehlerhaft): {recreated}")
     print(f"Übersprungen (valide): {skipped}")
     print(f"Fehler: {errors}")
+    print(f"Mit OCR verarbeitet: {ocr_count}")
     print(f"Gesamtzeit: {format_time(total_time)}")
-    if processed > 0:
-        print(f"Durchschnitt: {total_time/total_files:.2f}s pro Datei")
+    # Berechne Durchschnitt nur für tatsächlich verarbeitete Dateien (nicht übersprungene)
+    actually_processed = processed + recreated
+    if actually_processed > 0:
+        print(f"Durchschnitt: {total_time/actually_processed:.2f}s pro Datei (nur verarbeitete)")
     print("=" * 70)
 
 if __name__ == "__main__":
