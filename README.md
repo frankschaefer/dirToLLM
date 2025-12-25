@@ -1,6 +1,6 @@
 # FileInventory - OneDrive Dokumenten-Zusammenfassung (macOS)
 
-**Version:** 1.7.1
+**Version:** 1.7.4
 **Datum:** 2025-12-25
 **Lizenz:** Proprietär
 
@@ -637,6 +637,23 @@ top_keywords = Counter(all_keywords).most_common(10)
 ---
 
 ## Versionsverlauf
+
+### Version 1.7.4 (2025-12-25)
+- **Debug**: Erweiterte Fehlerausgaben bei Context/Token-Fehlern
+- **Debug**: Zeigt geschätzte Token-Anzahl und tatsächliche LLM-Fehlermeldung
+- **Verbessert**: Bessere Diagnose von Context-Problemen für Fehlersuche
+- **Hilfe**: Ermöglicht Identifikation von LM Studio Konfigurationsproblemen
+
+### Version 1.7.3 (2025-12-25)
+- **Verbessert**: Breitere erste Spalte in Dateiendungen-Statistik (18 statt 10 Zeichen)
+- **Fix**: Lange Dateiendungen wie ".herunterladen" werden jetzt korrekt dargestellt
+- **Optimiert**: Tabellenbreite auf 80 Zeichen erweitert für bessere Lesbarkeit
+
+### Version 1.7.2 (2025-12-25)
+- **Fix**: Intelligente retry_lengths - berücksichtigt jetzt tatsächliche Textlänge
+- **Optimiert**: Vermeidet unnötige Retry-Versuche mit zu großen Textlängen
+- **Verbessert**: Entfernt Duplikate aus retry_lengths für effizientere Verarbeitung
+- **Beispiel**: 23k Zeichen Text → nur 2 Versuche statt 6
 
 ### Version 1.7.1 (2025-12-25)
 - **Neu**: `--max-tokens TOKENS` Parameter für dynamische Context-Länge

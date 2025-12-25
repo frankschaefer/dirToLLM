@@ -17,7 +17,7 @@ import argparse
 warnings.filterwarnings('ignore', category=UserWarning, module='openpyxl')
 
 # Version und Metadaten
-VERSION = "1.7.1"
+VERSION = "1.7.4"
 VERSION_DATE = "2025-12-25"
 SCRIPT_NAME = "FileInventory - OneDrive Dokumenten-Zusammenfassung (macOS)"
 
@@ -464,15 +464,20 @@ def summarize_with_lmstudio(text, file_path=None, file_ext=None, max_chars=30000
     chars_per_token = 4
     max_chars = (MAX_CONTEXT_TOKENS - 1000) * chars_per_token  # Reserve 1000 Tokens für Prompt und Antwort
 
-    # Erstelle Retry-Liste mit absteigenden Werten
+    actual_text_length = len(text)
+
+    # Erstelle Retry-Liste mit absteigenden Werten, aber nicht größer als der tatsächliche Text
     retry_lengths = [
-        max_chars,
-        int(max_chars * 0.67),  # 2/3
-        int(max_chars * 0.47),  # ~1/2
-        int(max_chars * 0.33),  # 1/3
-        int(max_chars * 0.20),  # 1/5
-        3000  # Minimum-Fallback
+        min(max_chars, actual_text_length),
+        min(int(max_chars * 0.67), actual_text_length),  # 2/3
+        min(int(max_chars * 0.47), actual_text_length),  # ~1/2
+        min(int(max_chars * 0.33), actual_text_length),  # 1/3
+        min(int(max_chars * 0.20), actual_text_length),  # 1/5
+        min(3000, actual_text_length)  # Minimum-Fallback
     ]
+
+    # Entferne Duplikate und sortiere absteigend
+    retry_lengths = sorted(list(set(retry_lengths)), reverse=True)
 
     # Hole dateityp-spezifischen Prompt
     user_prompt = get_prompt_for_filetype(file_ext) if file_ext else get_prompt_for_filetype("")
@@ -527,7 +532,10 @@ def summarize_with_lmstudio(text, file_path=None, file_ext=None, max_chars=30000
 
                 if is_context_error:
                     if attempt < len(retry_lengths):
-                        print(f"  → Context/Token-Fehler ({current_max_chars} Zeichen), versuche mit weniger...")
+                        # Berechne geschätzte Tokens für Debug-Ausgabe
+                        estimated_tokens = current_max_chars // 4
+                        print(f"  → Context/Token-Fehler ({current_max_chars:,} Zeichen ≈ {estimated_tokens:,} Tokens), versuche mit weniger...")
+                        print(f"     LLM-Fehler: {error_msg[:100]}...")  # Erste 100 Zeichen der Fehlermeldung
                         continue  # Nächster Versuch mit weniger Text
                     else:
                         print(f"  → Alle Retry-Versuche fehlgeschlagen")
@@ -540,7 +548,9 @@ def summarize_with_lmstudio(text, file_path=None, file_ext=None, max_chars=30000
             except (ValueError, KeyError, json.JSONDecodeError):
                 # Kein JSON oder kein error-Feld - könnte trotzdem Context-Fehler sein
                 if resp.status_code == 400 and attempt < len(retry_lengths):
-                    print(f"  → HTTP 400 Fehler ({current_max_chars} Zeichen), versuche mit weniger...")
+                    estimated_tokens = current_max_chars // 4
+                    print(f"  → HTTP 400 Fehler ({current_max_chars:,} Zeichen ≈ {estimated_tokens:,} Tokens), versuche mit weniger...")
+                    print(f"     Response: {resp.text[:150]}...")  # Erste 150 Zeichen der Response
                     continue
                 else:
                     print(f"HTTP-Fehler {resp.status_code}:")
@@ -1057,11 +1067,11 @@ def walk_and_process():
     sys.stdout.flush()
 
     # Zeige Statistik nach Dateiendungen
-    print("\n" + "=" * 70)
+    print("\n" + "=" * 80)
     print("STATISTIK DER DATEIENDUNGEN")
-    print("=" * 70)
-    print(f"{'Endung':<10} {'Anzahl':>8} {'Größe (MB)':>12} {'Ø Größe (KB)':>14}  {'Status':<15}")
-    print("-" * 70)
+    print("=" * 80)
+    print(f"{'Endung':<18} {'Anzahl':>8} {'Größe (MB)':>12} {'Ø Größe (KB)':>14}  {'Status':<15}")
+    print("-" * 80)
 
     # Sortiere nach Anzahl der Dateien (absteigend)
     sorted_stats = sorted(file_stats.items(), key=lambda x: x[1]['count'], reverse=True)
@@ -1075,9 +1085,9 @@ def walk_and_process():
         ext_display = ext if ext else "(keine)"
         will_analyze = "→ WIRD ANALYSIERT" if ext in EXTENSIONS else ""
 
-        print(f"{ext_display:<10} {count:>8,} {total_size_mb:>12.2f} {avg_size_kb:>14.2f}  {will_analyze:<15}")
+        print(f"{ext_display:<18} {count:>8,} {total_size_mb:>12.2f} {avg_size_kb:>14.2f}  {will_analyze:<15}")
 
-    print("=" * 70)
+    print("=" * 80)
 
     total_files = len(all_files)
     print(f"\nGefunden: {total_files} Dateien zum Verarbeiten")
