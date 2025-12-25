@@ -1,6 +1,6 @@
 # FileInventory - OneDrive Dokumenten-Zusammenfassung (macOS)
 
-**Version:** 1.5.1
+**Version:** 1.6.3
 **Datum:** 2025-12-25
 **Lizenz:** Proprietär
 
@@ -12,8 +12,9 @@ FileInventory ist ein intelligentes Python-Tool zur automatischen Analyse und Zu
 
 - **Multiformat-Unterstützung**: PDF, Word (.docx/.doc), Excel (.xlsx/.xls/.xlsm/.xltx), PowerPoint (.pptx/.ppt), Text, Markdown und Bilder
 - **OCR-Unterstützung**: Automatische Texterkennung für gescannte PDFs mit Tesseract OCR
+- **RAG-Optimierung**: Wissensextraktion für semantische Suche mit Schlüsselbegriffen und strukturierter Zusammenfassung
 - **macOS-optimiert**: Native macOS-Unterstützung mit OneDrive-Integration
-- **LLM-basierte Analyse**: Intelligente Zusammenfassungen mit dateityp-spezifischen Prompts
+- **LLM-basierte Analyse**: Intelligente Zusammenfassungen mit RAG-optimierten, dateityp-spezifischen Prompts
 - **Vision-Fähigkeit**: Bildanalyse und -beschreibung mittels multimodaler Modelle
 - **Icon-Filter**: Automatisches Überspringen kleiner Bilder (<10 KB)
 - **Validierung**: Automatische Überprüfung und Neuerstellung fehlerhafter JSON-Ausgaben
@@ -267,14 +268,21 @@ Für jede verarbeitete Datei wird eine JSON-Datei erstellt:
 
 ```json
 {
-  "name": "Beispieldokument.pdf",
   "path": "Projekte/Kunde_A/Beispieldokument.pdf",
   "ext": ".pdf",
   "size": 1048576,
   "created": "2025-01-15T10:30:00",
   "modified": "2025-01-20T14:45:00",
   "chars": 15420,
-  "summary": "Projektübersicht für Kunde A mit Marc König als Projektleiter. Beschreibt Meilensteine Q1-Q4 2025 mit Fokus auf digitale Transformation und Prozessoptimierung...",
+  "summary": "Projektübersicht für Kunde A mit Marc König als Projektleiter. Beschreibt Meilensteine Q1-Q4 2025 mit Fokus auf digitale Transformation und Prozessoptimierung.",
+  "keywords": [
+    "Projektübersicht",
+    "Marc König",
+    "Meilensteine 2025",
+    "Digitale Transformation",
+    "Prozessoptimierung",
+    "Q1-Q4"
+  ],
   "ocr_info": {
     "used_ocr": true,
     "ocr_pages": 15,
@@ -288,14 +296,14 @@ Für jede verarbeitete Datei wird eine JSON-Datei erstellt:
 
 | Feld | Beschreibung |
 |------|--------------|
-| `name` | Dateiname |
-| `path` | Relativer Pfad zur Quelldatei |
+| `path` | Relativer Pfad zur Quelldatei (inkl. Dateiname) |
 | `ext` | Dateierweiterung |
 | `size` | Dateigröße in Bytes |
 | `created` | Erstellungszeitpunkt (ISO 8601) |
 | `modified` | Letzte Änderung (ISO 8601) |
 | `chars` | Anzahl extrahierter Zeichen |
-| `summary` | KI-generierte Zusammenfassung (max. 650 Zeichen, reiner Fließtext, auf Deutsch) |
+| `summary` | KI-generierte Zusammenfassung (max. 1000 Zeichen, RAG-optimiert, auf Deutsch) |
+| `keywords` | **Array:** Extrahierte Schlüsselbegriffe als Liste für schnelle Kategorisierung |
 | `ocr_info` | **Optional:** OCR-Metadaten (nur bei gescannten PDFs) |
 | `ocr_info.used_ocr` | Boolean - ob OCR verwendet wurde |
 | `ocr_info.ocr_pages` | Anzahl der Seiten, die mit OCR verarbeitet wurden |
@@ -357,18 +365,31 @@ Für jede verarbeitete Datei wird eine JSON-Datei erstellt:
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### Dateityp-spezifische Prompts
+### RAG-optimierte Wissensextraktion
 
-Das System verwendet optimierte Prompts für jeden Dateityp:
+Das System verwendet einen spezialisierten RAG-Ansatz (Retrieval-Augmented Generation) für maximale Auffindbarkeit:
 
-- **PDF/DOCX/DOC**: Fokus auf Inhalte, Themen und Kernaussagen mit Personennamen
-- **PPTX/PPT**: Hauptthemen, Folieninhalte und zentrale Botschaften
-- **XLSX/XLS/XLSM/XLTX**: Art der Daten, Kategorien und Zweck der Tabelle
-- **TXT**: Wichtigste Informationen und Zweck
-- **MD**: Struktur, Hauptthemen und Inhalte
-- **PNG/JPG/JPEG**: Bildbeschreibung, visuelle Elemente, Text und Diagramme
+**Prompt-Struktur:**
+- Sachliche, informationsdichte Zusammenfassungen ohne Meta-Kommentare
+- Beibehaltung wichtiger Fachbegriffe, Zahlen, Technologien und Personennamen
+- Beschreibung von Zweck, Inhalt, Kontext und Besonderheiten
+- Strukturierte Darstellung: Was? Wozu? Welche Inhalte? Was ist besonders?
+- **Kommagetrennte Schlüsselbegriff-Liste** am Ende jeder Zusammenfassung
 
-**Besonderheit**: Alle Prompts fordern explizit **reinen Fließtext ohne Markdown-Formatierung** an und priorisieren die Nennung von Personennamen mit ihrem Kontext.
+**Dateityp-spezifische Schwerpunkte:**
+- **PDF/DOCX/DOC**: Dokumenteninhalt, Kernaussagen, Personen und ihre Rollen
+- **PPTX/PPT**: Präsentationsthemen, Kernbotschaften, Folienstruktur
+- **XLSX/XLS/XLSM/XLTX**: Datenarten, Kategorien, Zahlen, Automatisierung
+- **TXT/MD**: Textinhalt, Dokumentstruktur, technische Details
+- **PNG/JPG/JPEG**: Bildinhalte, sichtbarer Text, Diagramme, Personen
+
+**Vorteile für semantische Suche:**
+- Maximale Informationsdichte (bis zu 1000 Zeichen)
+- **Separates Keywords-Array** für schnelle Kategorisierung und Filterung
+- Automatische Extraktion der Schlüsselbegriffe aus der LLM-Antwort
+- Keine ablenkenden Formatierungen oder Füllwörter
+- Optimiert für Vektorsuche und RAG-Systeme
+- Keywords ermöglichen effiziente Volltextsuche und Indexierung
 
 ### Adaptive Context-Verwaltung
 
@@ -460,7 +481,7 @@ Vision-Analyse fehlgeschlagen: [Error]
 ```python
 # In summarize_with_lmstudio():
 "temperature": 0.3,      # Niedrig = deterministischer, schneller
-"max_tokens": 250,       # Limitiert auf ~650 Zeichen Output
+"max_tokens": 400,       # Limitiert auf ~1000 Zeichen Output
 ```
 
 **Erwartete Verarbeitungsgeschwindigkeit (Apple M1/M2):**
@@ -484,11 +505,11 @@ Vision-Analyse fehlgeschlagen: [Error]
 
 #### Zusammenfassungslänge ändern
 ```python
-# In get_prompt_for_filetype():
-"...in maximal 650 Zeichen..."  # Auf gewünschte Länge anpassen
+# In get_prompt_for_filetype() - Basis-Prompt:
+"Maximal 1000 Zeichen"  # Auf gewünschte Länge anpassen
 
 # In summarize_with_lmstudio():
-"max_tokens": 250,  # Entsprechend anpassen (~2.6 Zeichen pro Token)
+"max_tokens": 400,  # Entsprechend anpassen (~2.5 Zeichen pro Token)
 ```
 
 #### Retry-Strategie modifizieren
@@ -519,8 +540,22 @@ for json_file in glob.glob(os.path.expanduser("~/LLM/**/*.json"), recursive=True
         data = json.load(f)
         summaries.append(data)
 
-# Suche nach Personennamen
+# Suche nach Personennamen in der Zusammenfassung
 results = [s for s in summaries if "Marc König" in s.get("summary", "")]
+
+# Suche nach Keywords
+keyword_results = [s for s in summaries if "Digitale Transformation" in s.get("keywords", [])]
+
+# Kombinierte Suche
+combined = [s for s in summaries
+            if any(kw in ["Projekt", "Transformation"] for kw in s.get("keywords", []))]
+
+# Gruppierung nach Keywords
+from collections import Counter
+all_keywords = []
+for s in summaries:
+    all_keywords.extend(s.get("keywords", []))
+top_keywords = Counter(all_keywords).most_common(10)
 
 # Weitere Verarbeitung...
 ```
@@ -543,6 +578,34 @@ results = [s for s in summaries if "Marc König" in s.get("summary", "")]
 ---
 
 ## Versionsverlauf
+
+### Version 1.6.3 (2025-12-25)
+- **Fix**: OCR-Zähler wird jetzt korrekt aktualisiert (auch bei bereits verarbeiteten Dateien)
+- **Fix**: OCR-Warnung "nicht verfügbar" erscheint nur einmal pro PDF statt bei jeder Seite
+- **Verbessert**: OCR-Import-Check erfolgt einmal zu Beginn der PDF-Verarbeitung
+- **Verbessert**: OCR-Statistik aus existierenden JSON-Dateien wird korrekt gelesen
+
+### Version 1.6.2 (2025-12-25)
+- **Optimiert**: Redundantes `name` Feld aus JSON-Struktur entfernt
+- **Verbessert**: Dateiname ist bereits im `path` Feld enthalten
+- **Optimiert**: Schlankere JSON-Dateien durch reduzierten Speicherbedarf
+
+### Version 1.6.1 (2025-12-25)
+- **Neu**: Separates `keywords` Feld in JSON-Struktur
+- **Neu**: Automatische Extraktion der Schlüsselbegriffe aus LLM-Antwort
+- **Verbessert**: Keywords als Array für einfache Filterung und Suche
+- **Verbessert**: Zusammenfassung und Keywords werden getrennt gespeichert
+- **Optimiert**: README mit erweiterten Integration-Beispielen
+
+### Version 1.6.0 (2025-12-25)
+- **Neu**: RAG-optimierte Prompt-Struktur für semantische Suche
+- **Neu**: Kommagetrennte Schlüsselbegriff-Liste in jeder Zusammenfassung
+- **Verbessert**: Zusammenfassungslänge auf 1000 Zeichen erhöht
+- **Verbessert**: Informationsdichte durch strukturierte Wissensextraktion
+- **Verbessert**: System-Prompt fokussiert auf Fakten, Zahlen und Fachbegriffe
+- **Verbessert**: max_tokens auf 400 erhöht für längere Ausgaben
+- **Optimiert**: Prompts ohne Meta-Kommentare und Füllwörter
+- **Optimiert**: Bessere Auffindbarkeit durch strukturierte Darstellung (Was? Wozu? Welche Inhalte? Besonderheiten?)
 
 ### Version 1.5.1 (2025-12-25)
 - **Neu**: OCR-Statistiken und -Berichterstattung

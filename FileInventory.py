@@ -16,7 +16,7 @@ import warnings
 warnings.filterwarnings('ignore', category=UserWarning, module='openpyxl')
 
 # Version und Metadaten
-VERSION = "1.5.1"
+VERSION = "1.6.3"
 VERSION_DATE = "2025-12-25"
 SCRIPT_NAME = "FileInventory - OneDrive Dokumenten-Zusammenfassung (macOS)"
 
@@ -69,6 +69,17 @@ def extract_text_pdf(path):
         'ocr_chars': 0
     }
 
+    # Prüfe OCR-Verfügbarkeit einmal am Anfang
+    ocr_available = False
+    pytesseract = None
+    Image = None
+    try:
+        import pytesseract
+        from PIL import Image
+        ocr_available = True
+    except ImportError:
+        pass  # OCR nicht verfügbar, wird bei Bedarf gemeldet
+
     try:
         with pdfplumber.open(path) as pdf:
             total_pages = len(pdf.pages)
@@ -80,36 +91,33 @@ def extract_text_pdf(path):
 
                 # Wenn keine oder sehr wenig Text gefunden wurde, könnte es ein Scan sein
                 if len(page_text.strip()) < 10:
-                    # Versuche OCR mit pytesseract
-                    try:
-                        import pytesseract
-                        from PIL import Image
-                        import io
+                    # Versuche OCR mit pytesseract (falls verfügbar)
+                    if ocr_available:
+                        try:
+                            # Konvertiere PDF-Seite zu Bild
+                            if hasattr(page, 'to_image'):
+                                pil_image = page.to_image(resolution=300).original
 
-                        # Konvertiere PDF-Seite zu Bild
-                        if hasattr(page, 'to_image'):
-                            pil_image = page.to_image(resolution=300).original
+                                # OCR mit Tesseract (Deutsch)
+                                ocr_text = pytesseract.image_to_string(pil_image, lang='deu')
 
-                            # OCR mit Tesseract (Deutsch)
-                            ocr_text = pytesseract.image_to_string(pil_image, lang='deu')
+                                if len(ocr_text.strip()) > len(page_text.strip()):
+                                    page_text = ocr_text
+                                    ocr_pages += 1
+                                    total_ocr_chars += len(ocr_text)
+                                    ocr_info['used_ocr'] = True
 
-                            if len(ocr_text.strip()) > len(page_text.strip()):
-                                page_text = ocr_text
-                                ocr_pages += 1
-                                total_ocr_chars += len(ocr_text)
-                                ocr_info['used_ocr'] = True
+                                    if page_num == 1:
+                                        print(f"  → OCR verwendet für Seite {page_num}/{total_pages}")
 
-                                if page_num == 1:
-                                    print(f"  → OCR verwendet für Seite {page_num}/{total_pages}")
-
-                    except ImportError:
-                        # pytesseract nicht installiert
+                        except Exception as e:
+                            # OCR fehlgeschlagen, verwende ursprünglichen Text
+                            if page_num == 1:
+                                print(f"  → OCR-Fehler auf Seite {page_num}: {str(e)[:50]}")
+                    else:
+                        # pytesseract nicht installiert - nur einmal warnen
                         if page_num == 1:
                             print(f"  → Warnung: OCR nicht verfügbar (pytesseract nicht installiert)")
-                    except Exception as e:
-                        # OCR fehlgeschlagen, verwende ursprünglichen Text
-                        if page_num == 1:
-                            print(f"  → OCR-Fehler auf Seite {page_num}: {str(e)[:50]}")
 
                 texts.append(page_text)
 
@@ -320,24 +328,55 @@ def is_file_accessible(file_path):
         return False
 
 def get_prompt_for_filetype(file_ext):
-    """Gibt einen dateityp-spezifischen Prompt zurück."""
-    prompts = {
-        ".pdf": "Erstelle eine präzise Zusammenfassung dieses PDF-Dokuments AUF DEUTSCH in maximal 650 Zeichen als reinen Fließtext ohne Markdown-Formatierung. Bevorzuge die Nennung von Personennamen mit ihrem Kontext (Rolle, Funktion, Beziehung). Erfasse wichtigste Inhalte, Themen und Kernaussagen. Verwende keine Aufzählungszeichen, Sternchen, Hashtags oder andere Formatierungszeichen.",
-        ".docx": "Erstelle eine präzise Zusammenfassung dieses Word-Dokuments AUF DEUTSCH in maximal 650 Zeichen als reinen Fließtext ohne Markdown-Formatierung. Bevorzuge die Nennung von Personennamen mit ihrem Kontext (Rolle, Funktion, Beziehung). Erfasse wichtigste Inhalte, Themen und Kernaussagen. Verwende keine Aufzählungszeichen, Sternchen, Hashtags oder andere Formatierungszeichen.",
-        ".doc": "Erstelle eine präzise Zusammenfassung dieses Word-Dokuments AUF DEUTSCH in maximal 650 Zeichen als reinen Fließtext ohne Markdown-Formatierung. Bevorzuge die Nennung von Personennamen mit ihrem Kontext (Rolle, Funktion, Beziehung). Erfasse wichtigste Inhalte, Themen und Kernaussagen. Verwende keine Aufzählungszeichen, Sternchen, Hashtags oder andere Formatierungszeichen.",
-        ".pptx": "Erstelle eine präzise Zusammenfassung dieser PowerPoint-Präsentation AUF DEUTSCH in maximal 650 Zeichen als reinen Fließtext ohne Markdown-Formatierung. Bevorzuge die Nennung von Personennamen mit ihrem Kontext (Rolle, Funktion). Erfasse Hauptthemen, wichtigste Folieninhalte und zentrale Botschaften. Verwende keine Aufzählungszeichen, Sternchen, Hashtags oder andere Formatierungszeichen.",
-        ".ppt": "Erstelle eine präzise Zusammenfassung dieser PowerPoint-Präsentation AUF DEUTSCH in maximal 650 Zeichen als reinen Fließtext ohne Markdown-Formatierung. Bevorzuge die Nennung von Personennamen mit ihrem Kontext (Rolle, Funktion). Erfasse Hauptthemen, wichtigste Folieninhalte und zentrale Botschaften. Verwende keine Aufzählungszeichen, Sternchen, Hashtags oder andere Formatierungszeichen.",
-        ".xlsx": "Erstelle eine präzise Zusammenfassung dieser Excel-Datei AUF DEUTSCH in maximal 650 Zeichen als reinen Fließtext ohne Markdown-Formatierung. Nenne relevante Personennamen falls vorhanden (mit Kontext). Beschreibe die Art der Daten, wichtige Kategorien und den Zweck der Tabelle. Verwende keine Aufzählungszeichen, Sternchen, Hashtags oder andere Formatierungszeichen.",
-        ".xls": "Erstelle eine präzise Zusammenfassung dieser Excel-Datei AUF DEUTSCH in maximal 650 Zeichen als reinen Fließtext ohne Markdown-Formatierung. Nenne relevante Personennamen falls vorhanden (mit Kontext). Beschreibe die Art der Daten, wichtige Kategorien und den Zweck der Tabelle. Verwende keine Aufzählungszeichen, Sternchen, Hashtags oder andere Formatierungszeichen.",
-        ".xlsm": "Erstelle eine präzise Zusammenfassung dieser Excel-Datei mit Makros AUF DEUTSCH in maximal 650 Zeichen als reinen Fließtext ohne Markdown-Formatierung. Nenne relevante Personennamen falls vorhanden (mit Kontext). Beschreibe die Art der Daten, wichtige Kategorien und den Zweck der Tabelle. Verwende keine Aufzählungszeichen, Sternchen, Hashtags oder andere Formatierungszeichen.",
-        ".xltx": "Erstelle eine präzise Zusammenfassung dieser Excel-Vorlage AUF DEUTSCH in maximal 650 Zeichen als reinen Fließtext ohne Markdown-Formatierung. Nenne relevante Personennamen falls vorhanden (mit Kontext). Beschreibe die Art der Daten, wichtige Kategorien und den Zweck der Vorlage. Verwende keine Aufzählungszeichen, Sternchen, Hashtags oder andere Formatierungszeichen.",
-        ".txt": "Erstelle eine präzise Zusammenfassung dieser Textdatei AUF DEUTSCH in maximal 650 Zeichen als reinen Fließtext ohne Markdown-Formatierung. Bevorzuge die Nennung von Personennamen mit ihrem Kontext (Rolle, Funktion, Beziehung). Erfasse wichtigste Informationen und den Zweck des Dokuments. Verwende keine Aufzählungszeichen, Sternchen, Hashtags oder andere Formatierungszeichen.",
-        ".md": "Erstelle eine präzise Zusammenfassung dieses Markdown-Dokuments AUF DEUTSCH in maximal 650 Zeichen als reinen Fließtext ohne Markdown-Formatierung. Bevorzuge die Nennung von Personennamen mit ihrem Kontext. Erfasse Struktur, Hauptthemen und wichtigste Inhalte. Verwende keine Aufzählungszeichen, Sternchen, Hashtags oder andere Formatierungszeichen.",
-        ".png": "Beschreibe dieses Bild AUF DEUTSCH in maximal 650 Zeichen als reinen Fließtext ohne Markdown-Formatierung. Nenne sichtbare Personennamen oder Personen mit ihrem Kontext. Erfasse was zu sehen ist, den Zweck des Bildes und wichtige Details wie Text, Diagramme oder Grafiken. Verwende keine Aufzählungszeichen, Sternchen, Hashtags oder andere Formatierungszeichen.",
-        ".jpg": "Beschreibe dieses Foto/Bild AUF DEUTSCH in maximal 650 Zeichen als reinen Fließtext ohne Markdown-Formatierung. Nenne sichtbare Personennamen oder abgebildete Personen mit ihrem Kontext. Erfasse was zu sehen ist, den Kontext und wichtige visuelle Elemente. Verwende keine Aufzählungszeichen, Sternchen, Hashtags oder andere Formatierungszeichen.",
-        ".jpeg": "Beschreibe dieses Foto/Bild AUF DEUTSCH in maximal 650 Zeichen als reinen Fließtext ohne Markdown-Formatierung. Nenne sichtbare Personennamen oder abgebildete Personen mit ihrem Kontext. Erfasse was zu sehen ist, den Kontext und wichtige visuelle Elemente. Verwende keine Aufzählungszeichen, Sternchen, Hashtags oder andere Formatierungszeichen."
+    """
+    Gibt einen RAG-optimierten, dateityp-spezifischen Prompt zurück.
+    Optimiert für semantische Suche und Wissensextraktion.
+    """
+    # Basis-Prompt für RAG-Optimierung
+    base_prompt = """Du bist ein System zur Wissensextraktion für semantische Suche (RAG).
+
+Fasse den folgenden Dateiinhalt so zusammen, dass er für spätere Fragen maximal gut auffindbar und nutzbar ist.
+
+REGELN:
+- Maximal 1000 Zeichen
+- Sachlich, präzise, ohne Floskeln
+- Keine Meta-Kommentare (z. B. „Diese Datei beschreibt…")
+- Nutze klare, informationsdichte Sätze
+- Behalte wichtige Fachbegriffe, Zahlen, Technologien und Personennamen
+- Beschreibe Zweck, Inhalt, Kontext und Besonderheiten
+- Falls vorhanden: Ziel, Funktion, Datenarten, Methoden, Abhängigkeiten
+
+STRUKTUR (fließender Text ohne Überschriften):
+- Worum geht es?
+- Wozu dient die Datei?
+- Welche Inhalte/Daten/Logik sind enthalten?
+- Was macht sie besonders oder relevant?
+
+Abschließend: Kommagetrennte Liste zentraler Schlüsselbegriffe.
+
+WICHTIG: Antworte AUF DEUTSCH."""
+
+    # Dateityp-spezifische Ergänzungen
+    type_specific = {
+        ".pdf": "Fokus: Dokumenteninhalt, Kernaussagen, Personen und ihre Rollen.",
+        ".docx": "Fokus: Dokumenteninhalt, Kernaussagen, Personen und ihre Rollen.",
+        ".doc": "Fokus: Dokumenteninhalt, Kernaussagen, Personen und ihre Rollen.",
+        ".pptx": "Fokus: Präsentationsthemen, Kernbotschaften, Struktur der Folien.",
+        ".ppt": "Fokus: Präsentationsthemen, Kernbotschaften, Struktur der Folien.",
+        ".xlsx": "Fokus: Datenarten, Kategorien, Zweck der Tabelle, enthaltene Zahlen.",
+        ".xls": "Fokus: Datenarten, Kategorien, Zweck der Tabelle, enthaltene Zahlen.",
+        ".xlsm": "Fokus: Datenarten, Kategorien, Makro-Funktionalität, Automatisierung.",
+        ".xltx": "Fokus: Vorlagenzweck, Struktur, verwendete Kategorien.",
+        ".txt": "Fokus: Textinhalt, Zweck, enthaltene Informationen.",
+        ".md": "Fokus: Dokumentstruktur, Hauptthemen, technische Details.",
+        ".png": "Fokus: Bildinhalte, sichtbarer Text, Diagramme, Personen, Zweck.",
+        ".jpg": "Fokus: Bildinhalte, sichtbare Personen, Kontext, Details.",
+        ".jpeg": "Fokus: Bildinhalte, sichtbare Personen, Kontext, Details."
     }
-    return prompts.get(file_ext, "Erstelle eine präzise Zusammenfassung AUF DEUTSCH in maximal 650 Zeichen als reinen Fließtext ohne Markdown-Formatierung. Bevorzuge die Nennung von Personennamen mit ihrem Kontext. Verwende keine Aufzählungszeichen, Sternchen, Hashtags oder andere Formatierungszeichen.")
+
+    # Kombiniere Basis-Prompt mit dateityp-spezifischer Ergänzung
+    specific = type_specific.get(file_ext, "Fokus: Inhalt, Zweck, Relevanz.")
+    return f"{base_prompt}\n\n{specific}"
 
 def summarize_image_with_lmstudio(image_path, file_ext):
     """Analysiert ein Bild mit der Vision API von LM Studio."""
@@ -371,7 +410,7 @@ def summarize_image_with_lmstudio(image_path, file_ext):
                 }
             ],
             "temperature": 0.3,
-            "max_tokens": 250,
+            "max_tokens": 400,  # Erhöht für ~1000 Zeichen Output
         }
 
         resp = requests.post(LMSTUDIO_API_URL, json=payload, timeout=300)
@@ -414,7 +453,7 @@ def summarize_with_lmstudio(text, file_path=None, file_ext=None, max_chars=30000
     retry_lengths = [30000, 20000, 14000, 10000, 6000, 3000]
 
     # Hole dateityp-spezifischen Prompt
-    user_prompt = get_prompt_for_filetype(file_ext) if file_ext else "Erstelle eine präzise Zusammenfassung in maximal 650 Zeichen. Bevorzuge die Nennung von Personennamen mit ihrem Kontext."
+    user_prompt = get_prompt_for_filetype(file_ext) if file_ext else get_prompt_for_filetype("")
 
     for attempt, current_max_chars in enumerate(retry_lengths, 1):
         truncated_text = text[:current_max_chars]
@@ -424,7 +463,7 @@ def summarize_with_lmstudio(text, file_path=None, file_ext=None, max_chars=30000
             "messages": [
                 {
                     "role": "system",
-                    "content": "Du bist ein präziser Assistent, der kompakte Zusammenfassungen von Dokumenten erstellt. Achte besonders auf Personennamen und deren Kontext. Gib NIEMALS Markdown-Formatierung aus. Schreibe ausschließlich in reinem Fließtext ohne Aufzählungszeichen, Sternchen, Hashtags oder andere Formatierungszeichen."
+                    "content": "Du bist ein Wissensextraktionssystem für semantische Suche. Erstelle informationsdichte Zusammenfassungen ohne Meta-Kommentare oder Formatierung. Fokussiere auf Fakten, Zahlen, Namen und Fachbegriffe."
                 },
                 {
                     "role": "user",
@@ -432,7 +471,7 @@ def summarize_with_lmstudio(text, file_path=None, file_ext=None, max_chars=30000
                 },
             ],
             "temperature": 0.3,
-            "max_tokens": 250,
+            "max_tokens": 400,  # Erhöht für ~1000 Zeichen Output
         }
 
         try:
@@ -507,7 +546,13 @@ def process_file(src_file):
     if os.path.exists(dst_file):
         if validate_json_file(dst_file):
             print("Überspringe (valide Summary existiert):", dst_file)
-            return None
+            # Lese OCR-Info aus existierender JSON-Datei für Statistik
+            try:
+                with open(dst_file, 'r', encoding='utf-8') as f:
+                    existing_data = json.load(f)
+                    return existing_data.get('ocr_info', None)
+            except:
+                return None
         else:
             print("Lösche fehlerhafte JSON-Datei:", dst_file)
             try:
@@ -605,15 +650,33 @@ def process_file(src_file):
     # Sammle Datei-Metadaten
     stat = os.stat(src_file)
 
+    # Extrahiere Schlüsselbegriffe aus der Zusammenfassung
+    # Die Schlüsselbegriffe sollten am Ende der Zusammenfassung stehen
+    keywords = []
+    summary_text = summary
+
+    # Versuche, Schlüsselbegriffe zu extrahieren (nach dem letzten Punkt oder Newline)
+    # Suche nach kommagetrennten Begriffen am Ende
+    lines = summary.strip().split('\n')
+    if len(lines) > 1:
+        # Letzte Zeile könnte die Keywords enthalten
+        last_line = lines[-1].strip()
+        # Prüfe ob die letzte Zeile hauptsächlich aus kommagetrennten Wörtern besteht
+        if ',' in last_line and len(last_line) < 200:  # Keywords sind typischerweise kürzer
+            # Extrahiere Keywords
+            keywords = [kw.strip() for kw in last_line.split(',') if kw.strip()]
+            # Entferne die Keyword-Zeile aus der Zusammenfassung
+            summary_text = '\n'.join(lines[:-1]).strip()
+
     metadata = {
-        "name": os.path.basename(src_file),
         "path": rel_path,
         "ext": path_obj.suffix.lower(),
         "size": stat.st_size,
         "created": datetime.fromtimestamp(stat.st_ctime).isoformat(),
         "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
         "chars": len(text),
-        "summary": summary
+        "summary": summary_text,
+        "keywords": keywords
     }
 
     # Füge OCR-Info hinzu falls verfügbar
@@ -643,7 +706,7 @@ def validate_json_file(json_path):
             data = json.load(f)
 
         # Prüfe erforderliche Felder
-        required_fields = ['name', 'path', 'ext', 'size', 'created', 'modified', 'chars', 'summary']
+        required_fields = ['path', 'ext', 'size', 'created', 'modified', 'chars', 'summary']
         for field in required_fields:
             if field not in data:
                 print(f"Fehlende Struktur in {json_path}: Feld '{field}' fehlt")
