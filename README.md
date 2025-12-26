@@ -1,6 +1,6 @@
 # FileInventory - OneDrive Dokumenten-Zusammenfassung (macOS)
 
-**Version:** 1.7.4
+**Version:** 1.8.0
 **Datum:** 2025-12-25
 **Lizenz:** Proprietär
 
@@ -637,6 +637,13 @@ top_keywords = Counter(all_keywords).most_common(10)
 ---
 
 ## Versionsverlauf
+
+### Version 1.8.0 (2025-12-25)
+- **Neu**: Alphabetische Sortierung von Verzeichnissen und Dateien während der Verarbeitung
+- **Neu**: Zeitstempelprüfung beim Überspringen existierender JSON-Dateien
+- **Verbessert**: Automatische Neuverarbeitung wenn `created` oder `modified` Zeitstempel geändert wurden
+- **Verbessert**: Konsistente Verarbeitungsreihenfolge durch Sortierung
+- **Fix**: Verhindert übersprungene Updates bei Dateiänderungen
 
 ### Version 1.7.4 (2025-12-25)
 - **Debug**: Erweiterte Fehlerausgaben bei Context/Token-Fehlern

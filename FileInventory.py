@@ -17,7 +17,7 @@ import argparse
 warnings.filterwarnings('ignore', category=UserWarning, module='openpyxl')
 
 # Version und Metadaten
-VERSION = "1.7.4"
+VERSION = "1.8.0"
 VERSION_DATE = "2025-12-25"
 SCRIPT_NAME = "FileInventory - OneDrive Dokumenten-Zusammenfassung (macOS)"
 
@@ -576,7 +576,7 @@ def process_file(src_file):
 
     # Prüfe ob Datei existiert und valide ist
     if os.path.exists(dst_file):
-        if validate_json_file(dst_file):
+        if validate_json_file(dst_file, src_file):
             print("Überspringe (valide Summary existiert):", dst_file)
             # Lese OCR-Info aus existierender JSON-Datei für Statistik
             try:
@@ -586,7 +586,7 @@ def process_file(src_file):
             except:
                 return None
         else:
-            print("Lösche fehlerhafte JSON-Datei:", dst_file)
+            print("Lösche fehlerhafte oder veraltete JSON-Datei:", dst_file)
             try:
                 os.remove(dst_file)
             except Exception as e:
@@ -761,9 +761,13 @@ def process_file(src_file):
 
     return ocr_info
 
-def validate_json_file(json_path):
+def validate_json_file(json_path, src_file_path=None):
     """
     Validiert eine JSON-Ausgabedatei auf Korrektheit und sinnvollen Inhalt.
+
+    Args:
+        json_path: Pfad zur JSON-Datei
+        src_file_path: Optional - Pfad zur Quelldatei für Zeitstempelprüfung
 
     Returns:
         True: Datei ist valide und kann übersprungen werden
@@ -782,6 +786,21 @@ def validate_json_file(json_path):
             if field not in data:
                 print(f"Fehlende Struktur in {json_path}: Feld '{field}' fehlt")
                 return False
+
+        # Prüfe Zeitstempel wenn Quelldatei angegeben wurde
+        if src_file_path and os.path.exists(src_file_path):
+            try:
+                stat = os.stat(src_file_path)
+                current_created = datetime.fromtimestamp(stat.st_ctime).isoformat()
+                current_modified = datetime.fromtimestamp(stat.st_mtime).isoformat()
+
+                # Vergleiche Zeitstempel
+                if data.get('created') != current_created or data.get('modified') != current_modified:
+                    print(f"Zeitstempel geändert in {json_path} - Neuverarbeitung erforderlich")
+                    return False
+            except Exception as e:
+                print(f"Fehler beim Prüfen der Zeitstempel für {src_file_path}: {e}")
+                # Bei Fehler trotzdem als valide betrachten (sicherer)
 
         # Prüfe ob Summary sinnvoll ist (nicht leer, nicht nur Leerzeichen)
         summary = data.get('summary', '').strip()
@@ -1014,6 +1033,10 @@ def walk_and_process():
 
     # Nutze os.walk und zeige Fortschritt mit \r (carriage return)
     for root, dirs, files in os.walk(SRC_ROOT):
+        # Sortiere Verzeichnisse und Dateien alphabetisch
+        dirs.sort()
+        files.sort()
+
         dir_count += 1
 
         # Zähle relevante Dateien in diesem Verzeichnis
@@ -1133,7 +1156,7 @@ def walk_and_process():
 
             ocr_info = None
             if os.path.exists(dst_file):
-                if validate_json_file(dst_file):
+                if validate_json_file(dst_file, full_path):
                     skipped += 1
                     # Lese OCR-Info aus existierender JSON-Datei für Statistik
                     try:
@@ -1143,7 +1166,7 @@ def walk_and_process():
                     except:
                         pass
                 else:
-                    # Fehlerhafte Datei wird in process_file gelöscht und neu erstellt
+                    # Fehlerhafte oder veraltete Datei wird in process_file gelöscht und neu erstellt
                     ocr_info = process_file(full_path)
                     recreated += 1
             else:
