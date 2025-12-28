@@ -1,6 +1,6 @@
 # FileInventory - OneDrive Dokumenten-Zusammenfassung (macOS)
 
-**Version:** 1.9.0
+**Version:** 1.12.0
 **Datum:** 2025-12-28
 **Lizenz:** Proprietär
 
@@ -13,7 +13,8 @@ FileInventory ist ein intelligentes Python-Tool zur automatischen Analyse und Zu
 - **Multiformat-Unterstützung**: PDF, Word (.docx/.doc), Excel (.xlsx/.xls/.xlsm/.xltx), PowerPoint (.pptx/.ppt), Text, Markdown und Bilder
 - **OCR-Unterstützung**: Automatische Texterkennung für gescannte PDFs mit Tesseract OCR
 - **RAG-Optimierung**: Wissensextraktion für semantische Suche mit Schlüsselbegriffen und strukturierter Zusammenfassung
-- **Kombinierte Datenbank**: Erstellt durchsuchbare JSON-Datenbanken für ChatGPT/Claude (NEU in v1.9.0)
+- **Named Entity Recognition**: Automatische Extraktion von Firmen, Personen, Institutionen und Organisationen (NEU in v1.12.0)
+- **Kombinierte Datenbank**: Erstellt durchsuchbare JSON-Datenbanken für ChatGPT/Claude
 - **macOS-optimiert**: Native macOS-Unterstützung mit OneDrive-Integration
 - **LLM-basierte Analyse**: Intelligente Zusammenfassungen mit RAG-optimierten, dateityp-spezifischen Prompts
 - **Vision-Fähigkeit**: Bildanalyse und -beschreibung mittels multimodaler Modelle
@@ -423,6 +424,12 @@ Für jede verarbeitete Datei wird eine JSON-Datei erstellt:
     "Prozessoptimierung",
     "Q1-Q4"
   ],
+  "entities": {
+    "companies": ["Kunde A GmbH"],
+    "persons": ["Marc König"],
+    "institutions": [],
+    "organizations": []
+  },
   "ocr_info": {
     "used_ocr": true,
     "ocr_pages": 15,
@@ -442,8 +449,13 @@ Für jede verarbeitete Datei wird eine JSON-Datei erstellt:
 | `created` | Erstellungszeitpunkt (ISO 8601) |
 | `modified` | Letzte Änderung (ISO 8601) |
 | `chars` | Anzahl extrahierter Zeichen |
-| `summary` | KI-generierte Zusammenfassung (max. 1000 Zeichen, RAG-optimiert, auf Deutsch) |
+| `summary` | KI-generierte Zusammenfassung (max. 1500 Zeichen, RAG-optimiert, auf Deutsch) |
 | `keywords` | **Array:** Extrahierte Schlüsselbegriffe als Liste für schnelle Kategorisierung |
+| `entities` | **Objekt:** Named Entities (Firmen, Personen, Institutionen, Organisationen) |
+| `entities.companies` | **Array:** Liste extrahierter Firmennamen |
+| `entities.persons` | **Array:** Liste extrahierter Personennamen |
+| `entities.institutions` | **Array:** Liste extrahierter Institutionen (Behörden, Universitäten, etc.) |
+| `entities.organizations` | **Array:** Liste extrahierter Organisationen (Vereine, Verbände, NGOs, etc.) |
 | `ocr_info` | **Optional:** OCR-Metadaten (nur bei gescannten PDFs) |
 | `ocr_info.used_ocr` | Boolean - ob OCR verwendet wurde |
 | `ocr_info.ocr_pages` | Anzahl der Seiten, die mit OCR verarbeitet wurden |
@@ -699,16 +711,46 @@ results = [s for s in summaries if "Marc König" in s.get("summary", "")]
 # Suche nach Keywords
 keyword_results = [s for s in summaries if "Digitale Transformation" in s.get("keywords", [])]
 
-# Kombinierte Suche
-combined = [s for s in summaries
-            if any(kw in ["Projekt", "Transformation"] for kw in s.get("keywords", []))]
+# Suche nach Named Entities (NEU in v1.12.0)
+# Alle Dokumente mit einer bestimmten Firma
+company_docs = [s for s in summaries
+                if "Lott GmbH" in s.get("entities", {}).get("companies", [])]
+
+# Alle Dokumente mit einer bestimmten Person
+person_docs = [s for s in summaries
+               if "Christian Lott" in s.get("entities", {}).get("persons", [])]
+
+# Alle Dokumente mit Institutionen
+institution_docs = [s for s in summaries
+                    if len(s.get("entities", {}).get("institutions", [])) > 0]
+
+# Kombinierte Entity-Suche
+multi_entity = [s for s in summaries
+                if any(company in s.get("entities", {}).get("companies", [])
+                       for company in ["Lott GmbH", "BMWK"])]
+
+# Gruppierung nach Firmen
+from collections import Counter
+all_companies = []
+for s in summaries:
+    all_companies.extend(s.get("entities", {}).get("companies", []))
+top_companies = Counter(all_companies).most_common(10)
 
 # Gruppierung nach Keywords
-from collections import Counter
 all_keywords = []
 for s in summaries:
     all_keywords.extend(s.get("keywords", []))
 top_keywords = Counter(all_keywords).most_common(10)
+
+# Cross-Referenz: Welche Personen arbeiten mit welchen Firmen?
+person_company_map = {}
+for s in summaries:
+    persons = s.get("entities", {}).get("persons", [])
+    companies = s.get("entities", {}).get("companies", [])
+    for person in persons:
+        if person not in person_company_map:
+            person_company_map[person] = set()
+        person_company_map[person].update(companies)
 
 # Weitere Verarbeitung...
 ```
@@ -731,6 +773,38 @@ top_keywords = Counter(all_keywords).most_common(10)
 ---
 
 ## Versionsverlauf
+
+### Version 1.12.0 (2025-12-28)
+- **Neu**: Named Entity Recognition (NER) - Automatische Extraktion von Firmen, Personen, Institutionen und Organisationen
+- **Neu**: `extract_entities_with_lmstudio()` Funktion für strukturierte Entity-Extraktion
+- **Neu**: `extract_entities_from_image()` für Vision-basierte Entity-Extraktion aus Bildern
+- **Neu**: `parse_entity_response()` mit robustem Parsing für mehrsprachige Labels
+- **Neu**: `entities` Objekt in JSON-Ausgabe mit vier Kategorien (companies, persons, institutions, organizations)
+- **Neu**: Entity-Extraktion funktioniert auch bei kurzen Texten (< 1500 Zeichen) die nicht zusammengefasst werden
+- **Neu**: Intelligente Textkürzung für sehr lange Dokumente (erste 6000 + letzte 2000 Zeichen)
+- **Verbessert**: Niedrige Temperatur (0.1) für konsistente Entity-Extraktion
+- **Verbessert**: Fortschrittsanzeige zeigt Anzahl gefundener Entities pro Kategorie
+- **Verbessert**: Duplikat-Entfernung in Entity-Listen
+- **Dokumentiert**: Erweiterte README mit Entity-Feldern und Beispielen
+- **Kompatibilität**: Funktioniert mit Text- und Vision-Modellen
+
+### Version 1.11.0 (2025-12-28)
+- **Neu**: Intelligente Lernlogik für erfolgreiche Context-Größen
+- **Neu**: Globaler `_LEARNED_MAX_CHARS` Cache zur Optimierung zukünftiger Versuche
+- **Verbessert**: Adaptive Retry-Strategie mit 9 Schritten statt 6 (100%, 85%, 70%, 55%, 40%, 30%, 20%, 15%)
+- **Verbessert**: Startet bei 90% der gelernten erfolgreichen Größe für weniger Fehlversuche
+- **Verbessert**: Sanftere Übergänge zwischen Retry-Versuchen
+- **Fix**: Vermeidet Sprung von 20.878 → 3.000 Zeichen durch prozentuale Reduktion
+- **Optimiert**: Weniger LLM-Aufrufe durch Learning-Mechanismus
+
+### Version 1.10.0 (2025-12-28)
+- **Neu**: `--summary-max-chars` Parameter zur Steuerung der Zusammenfassungslänge
+- **Neu**: Automatisches Überspringen von LLM für Texte ≤ SUMMARY_MAX_CHARS (direkte Kopie statt Zusammenfassung)
+- **Verbessert**: SUMMARY_MAX_CHARS auf 1500 Zeichen erhöht
+- **Verbessert**: Dynamische max_tokens Berechnung: `int(summary_max_chars / 2.5) + 50`
+- **Verbessert**: `get_prompt_for_filetype()` akzeptiert nun `summary_max_chars` Parameter
+- **Optimiert**: Spart LLM-Aufrufe und Zeit bei kurzen Dokumenten
+- **Dokumentiert**: Neue Parameter in README mit Beispielen
 
 ### Version 1.9.0 (2025-12-28)
 - **Neu**: `--create-database` Parameter zum Erstellen kombinierter JSON-Datenbanken

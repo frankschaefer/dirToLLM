@@ -17,7 +17,7 @@ import argparse
 warnings.filterwarnings('ignore', category=UserWarning, module='openpyxl')
 
 # Version und Metadaten
-VERSION = "1.11.0"
+VERSION = "1.15.0"
 VERSION_DATE = "2025-12-28"
 SCRIPT_NAME = "FileInventory - OneDrive Dokumenten-Zusammenfassung (macOS)"
 
@@ -58,6 +58,21 @@ EXTENSIONS = {
     ".txt", ".md",                            # Textdateien
     ".png", ".jpg", ".jpeg"                   # Bilddateien
 }
+
+# Verzeichnismuster die übersprungen werden sollen (Glob-Patterns)
+EXCLUDE_PATTERNS = [
+    "**/Vorlagen/**",
+    "**/Templates/**",
+    "**/Musterdateien/**",
+    "**/1) Musterdateien und Vorlagen/**",
+    "**/_archive/**",
+    "**/.old/**",
+    "**/backup/**",
+    "**/Backup/**",
+]
+
+# Duplikat-Erkennung: Cache für Dateigrößen und Hashes
+_SIZE_HASH_CACHE = {}  # {size: {hash: path}}
 
 # Prüfe OCR-Verfügbarkeit global (einmalig beim Start)
 OCR_AVAILABLE = False
@@ -339,6 +354,158 @@ def is_file_accessible(file_path):
         print(f"Warnung: Konnte Dateizugriff nicht prüfen für {file_path}: {e}")
         return False
 
+def should_exclude_path(path):
+    """
+    Prüft ob ein Pfad basierend auf EXCLUDE_PATTERNS übersprungen werden soll.
+
+    Args:
+        path: Pfad als String oder pathlib.Path
+
+    Returns:
+        True wenn Pfad ausgeschlossen werden soll, False sonst
+    """
+    import fnmatch
+
+    path_str = str(path)
+    rel_path = os.path.relpath(path_str, SRC_ROOT)
+
+    for pattern in EXCLUDE_PATTERNS:
+        # Nutze fnmatch für Glob-Pattern-Matching
+        if fnmatch.fnmatch(rel_path, pattern.lstrip('**/')):
+            return True
+        # Prüfe auch absoluten Pfad
+        if fnmatch.fnmatch(path_str, pattern):
+            return True
+
+    return False
+
+def calculate_content_hash(file_path):
+    """
+    Berechnet SHA-256 Hash des Dateiinhalts für Duplikat-Erkennung.
+
+    Args:
+        file_path: Pfad zur Datei
+
+    Returns:
+        SHA-256 Hash als Hex-String
+    """
+    import hashlib
+
+    hasher = hashlib.sha256()
+    try:
+        with open(file_path, 'rb') as f:
+            # Lese in Chunks für große Dateien
+            for chunk in iter(lambda: f.read(8192), b''):
+                hasher.update(chunk)
+        return hasher.hexdigest()
+    except Exception as e:
+        print(f"  → Warnung: Konnte Hash nicht berechnen für {file_path}: {e}")
+        return None
+
+def is_duplicate_file(file_path, file_size):
+    """
+    Prüft ob eine Datei ein Duplikat einer bereits verarbeiteten Datei ist.
+    Verwendet Größe + Content-Hash für effiziente Duplikat-Erkennung.
+
+    Args:
+        file_path: Pfad zur zu prüfenden Datei
+        file_size: Größe der Datei in Bytes
+
+    Returns:
+        (is_duplicate, original_path) - Tuple mit Boolean und Pfad zum Original (oder None)
+    """
+    global _SIZE_HASH_CACHE
+
+    # Schritt 1: Prüfe ob Dateigröße bereits bekannt
+    if file_size not in _SIZE_HASH_CACHE:
+        # Neue Größe - kann kein Duplikat sein
+        _SIZE_HASH_CACHE[file_size] = {}
+        file_hash = calculate_content_hash(file_path)
+        if file_hash:
+            _SIZE_HASH_CACHE[file_size][file_hash] = file_path
+        return False, None
+
+    # Schritt 2: Größe existiert - berechne Hash und prüfe
+    file_hash = calculate_content_hash(file_path)
+    if not file_hash:
+        # Hash-Berechnung fehlgeschlagen - behandle nicht als Duplikat
+        return False, None
+
+    # Schritt 3: Prüfe ob Hash bereits existiert
+    if file_hash in _SIZE_HASH_CACHE[file_size]:
+        original_path = _SIZE_HASH_CACHE[file_size][file_hash]
+        return True, original_path
+
+    # Schritt 4: Neuer Hash für diese Größe - speichere
+    _SIZE_HASH_CACHE[file_size][file_hash] = file_path
+    return False, None
+
+def extract_entities_from_path(file_path):
+    """
+    Extrahiert potenzielle Firmen-/Projektnamen aus dem Dateipfad.
+
+    Analysiert die Verzeichnisstruktur und identifiziert wahrscheinliche:
+    - Firmennamen (z.B. "Siemens AG", "BMW Group")
+    - Projektnamen (z.B. "Projekt_Digitalisierung_2024")
+
+    Args:
+        file_path: Pfad zur Datei
+
+    Returns:
+        dict: {'companies': [...], 'projects': [...]}
+    """
+    import re
+
+    entities = {
+        'companies': [],
+        'projects': []
+    }
+
+    # Extrahiere relative Pfad-Komponenten
+    rel_path = os.path.relpath(file_path, SRC_ROOT)
+    path_parts = pathlib.Path(rel_path).parts
+
+    # Typische Firmennamen-Patterns
+    company_indicators = [
+        r'\b\w+\s+(AG|GmbH|SE|KG|OHG|mbH|Inc\.|Corp\.|Ltd\.|Group)\b',  # Rechtsformen
+        r'\b(Firma|Company|Corporation)\s+\w+\b',
+    ]
+
+    # Typische Projekt-Patterns
+    project_indicators = [
+        r'\bProjekt[e]?\b',
+        r'\bProject[s]?\b',
+        r'\b\d{4}[-_]\d{2}\b',  # z.B. "2024-01" oder "2024_Q1"
+    ]
+
+    for part in path_parts:
+        # Ignoriere bekannte System-Verzeichnisse
+        if part in ['Vorlagen', 'Templates', 'Musterdateien', 'backup', 'Backup', '_archive']:
+            continue
+
+        # Prüfe auf Firmennamen-Pattern
+        for pattern in company_indicators:
+            matches = re.findall(pattern, part, re.IGNORECASE)
+            for match in matches:
+                # Extrahiere vollständigen Namen (nicht nur die Rechtsform)
+                # Erweitere um umgebende Wörter
+                full_match = re.search(r'\b[\w\s]+' + re.escape(match) + r'\b', part, re.IGNORECASE)
+                if full_match:
+                    company_name = full_match.group(0).strip()
+                    if company_name not in entities['companies'] and len(company_name) > 2:
+                        entities['companies'].append(company_name)
+
+        # Prüfe auf Projekt-Pattern
+        for pattern in project_indicators:
+            if re.search(pattern, part, re.IGNORECASE):
+                # Bereinige Unterstriche und Bindestriche für bessere Lesbarkeit
+                project_name = part.replace('_', ' ').replace('-', ' ')
+                if project_name not in entities['projects'] and len(project_name) > 3:
+                    entities['projects'].append(project_name)
+                break
+
+    return entities
+
 def get_prompt_for_filetype(file_ext, summary_max_chars=1500):
     """
     Gibt einen RAG-optimierten, dateityp-spezifischen Prompt zurück.
@@ -395,6 +562,243 @@ WICHTIG: Antworte AUF DEUTSCH. Beginne direkt mit dem Inhalt, ohne Einleitung.""
     # Kombiniere Basis-Prompt mit dateityp-spezifischer Ergänzung
     specific = type_specific.get(file_ext, "Fokus: Inhalt, Zweck, Relevanz.")
     return f"{base_prompt}\n\n{specific}"
+
+def extract_entities_with_lmstudio(text, file_path=None, file_ext=None):
+    """
+    Extrahiert Named Entities (Firmen, Personen, Institutionen, Organisationen) aus Text.
+    Funktioniert sowohl für kurze als auch lange Texte.
+
+    Args:
+        text: Der zu analysierende Text
+        file_path: Optional - Pfad zur Datei (für Bilder)
+        file_ext: Optional - Dateierweiterung
+
+    Returns:
+        dict mit Listen: {'companies': [], 'persons': [], 'institutions': [], 'organizations': []}
+    """
+    # Prüfe ob es sich um eine Bilddatei handelt
+    is_image = file_ext and file_ext.lower() in {".png", ".jpg", ".jpeg"}
+
+    # Für Bilder mit Vision API
+    if is_image and file_path:
+        return extract_entities_from_image(file_path, file_ext)
+
+    # Begrenze Text auf sinnvolle Länge für Entity-Extraktion
+    # Für sehr lange Texte: verwende Anfang und Ende
+    max_chars = 8000
+    if len(text) > max_chars:
+        # Nehme erste 6000 und letzte 2000 Zeichen
+        truncated_text = text[:6000] + "\n...\n" + text[-2000:]
+    else:
+        truncated_text = text
+
+    entity_prompt = """Extrahiere alle Named Entities aus dem folgenden Text.
+
+KATEGORIEN:
+- Firmen/Unternehmen: Namen von Firmen, Gesellschaften, Unternehmen
+- Personen: Vollständige Namen von Personen (Vor- und Nachname wenn möglich)
+- Institutionen: Behörden, Ämter, staatliche Einrichtungen, Bildungseinrichtungen
+- Organisationen: Vereine, Verbände, NGOs, andere Organisationen
+
+REGELN:
+- Extrahiere nur tatsächlich im Text vorkommende Namen
+- Keine generischen Begriffe wie "der Kunde", "das Unternehmen"
+- Vollständige Namen bevorzugen
+- Keine Duplikate
+- Falls keine Entitäten in einer Kategorie: leere Liste
+
+AUSGABEFORMAT (exakt so):
+FIRMEN: Firma1, Firma2, Firma3
+PERSONEN: Max Mustermann, Erika Beispiel
+INSTITUTIONEN: Bundesamt für XY, Universität Z
+ORGANISATIONEN: Verein ABC, Verband DEF
+
+WICHTIG:
+- Wenn eine Kategorie leer ist, schreibe: "FIRMEN:" (ohne Einträge)
+- Trenne mehrere Einträge mit Komma
+- Antworte AUF DEUTSCH
+- Verwende exakt das Format oben"""
+
+    payload = {
+        "model": MODEL_NAME,
+        "messages": [
+            {
+                "role": "system",
+                "content": "Du bist ein System zur Extraktion von Named Entities. Extrahiere nur tatsächlich vorhandene Namen in den angegebenen Kategorien."
+            },
+            {
+                "role": "user",
+                "content": f"{entity_prompt}\n\nTEXT:\n{truncated_text}"
+            }
+        ],
+        "temperature": 0.1,  # Niedrige Temperatur für konsistente Extraktion
+        "max_tokens": 500,
+    }
+
+    try:
+        resp = requests.post(LMSTUDIO_API_URL, json=payload, timeout=120)
+        resp.raise_for_status()
+
+        data = resp.json()
+        response_text = data["choices"][0]["message"]["content"]
+
+        # Parse die strukturierte Antwort
+        entities = parse_entity_response(response_text)
+        return entities
+
+    except Exception as e:
+        print(f"  → Warnung: Entity-Extraktion fehlgeschlagen: {str(e)[:100]}")
+        # Fallback: Leere Listen
+        return {
+            'companies': [],
+            'persons': [],
+            'institutions': [],
+            'organizations': []
+        }
+
+def extract_entities_from_image(image_path, file_ext):
+    """
+    Extrahiert Named Entities aus einem Bild mit Vision API.
+
+    Returns:
+        dict mit Listen: {'companies': [], 'persons': [], 'institutions': [], 'organizations': []}
+    """
+    import base64
+
+    try:
+        # Lese Bild und konvertiere zu Base64
+        with open(image_path, 'rb') as img_file:
+            img_data = base64.b64encode(img_file.read()).decode('utf-8')
+
+        # Bestimme MIME-Type
+        mime_type = "image/png" if file_ext.lower() == ".png" else "image/jpeg"
+
+        entity_prompt = """Extrahiere alle sichtbaren Named Entities aus diesem Bild.
+
+KATEGORIEN:
+- Firmen/Unternehmen: Namen von Firmen, Gesellschaften, Unternehmen, Logos
+- Personen: Namen von Personen (wenn lesbar/erkennbar)
+- Institutionen: Behörden, Ämter, staatliche Einrichtungen, Bildungseinrichtungen
+- Organisationen: Vereine, Verbände, NGOs, andere Organisationen
+
+AUSGABEFORMAT (exakt so):
+FIRMEN: Firma1, Firma2
+PERSONEN: Max Mustermann, Erika Beispiel
+INSTITUTIONEN: Bundesamt für XY
+ORGANISATIONEN: Verein ABC
+
+Falls eine Kategorie keine Einträge hat, lasse sie leer (z.B. "FIRMEN:")"""
+
+        payload = {
+            "model": MODEL_NAME,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": entity_prompt},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:{mime_type};base64,{img_data}"
+                            }
+                        }
+                    ]
+                }
+            ],
+            "temperature": 0.1,
+            "max_tokens": 300,
+        }
+
+        resp = requests.post(LMSTUDIO_API_URL, json=payload, timeout=180)
+        resp.raise_for_status()
+
+        data = resp.json()
+        response_text = data["choices"][0]["message"]["content"]
+
+        # Parse die strukturierte Antwort
+        entities = parse_entity_response(response_text)
+        return entities
+
+    except Exception as e:
+        print(f"  → Warnung: Entity-Extraktion aus Bild fehlgeschlagen: {str(e)[:100]}")
+        return {
+            'companies': [],
+            'persons': [],
+            'institutions': [],
+            'organizations': []
+        }
+
+def parse_entity_response(response_text):
+    """
+    Parst die strukturierte Entity-Antwort vom LLM.
+
+    Erwartet Format:
+    FIRMEN: Firma1, Firma2
+    PERSONEN: Person1, Person2
+    INSTITUTIONEN: Institution1
+    ORGANISATIONEN: Org1, Org2
+
+    Returns:
+        dict: {'companies': [...], 'persons': [...], 'institutions': [...], 'organizations': [...]}
+    """
+    import re
+
+    entities = {
+        'companies': [],
+        'persons': [],
+        'institutions': [],
+        'organizations': []
+    }
+
+    # Mapping von deutschen Labels zu dict keys
+    label_mapping = {
+        'FIRMEN': 'companies',
+        'PERSONEN': 'persons',
+        'INSTITUTIONEN': 'institutions',
+        'ORGANISATIONEN': 'organizations',
+        # Auch englische Varianten für Robustheit
+        'COMPANIES': 'companies',
+        'PERSONS': 'persons',
+        'INSTITUTIONS': 'institutions',
+        'ORGANIZATIONS': 'organizations',
+        # Weitere mögliche Varianten
+        'UNTERNEHMEN': 'companies',
+        'FIRMA': 'companies',
+    }
+
+    # Parse Zeile für Zeile
+    lines = response_text.strip().split('\n')
+
+    for line in lines:
+        line = line.strip()
+        if not line or ':' not in line:
+            continue
+
+        # Trenne Label und Inhalt
+        parts = line.split(':', 1)
+        if len(parts) != 2:
+            continue
+
+        label = parts[0].strip().upper()
+        content = parts[1].strip()
+
+        # Finde passendes Mapping
+        entity_key = label_mapping.get(label)
+        if not entity_key:
+            continue
+
+        # Parse kommagetrennte Einträge
+        if content:
+            items = [item.strip() for item in content.split(',') if item.strip()]
+            # Entferne Duplikate und leere Einträge
+            items = list(dict.fromkeys(items))  # Erhält Reihenfolge und entfernt Duplikate
+            entities[entity_key].extend(items)
+
+    # Entferne finale Duplikate über alle geparsten Zeilen hinweg
+    for key in entities:
+        entities[key] = list(dict.fromkeys(entities[key]))
+
+    return entities
 
 def summarize_image_with_lmstudio(image_path, file_ext):
     """Analysiert ein Bild mit der Vision API von LM Studio."""
@@ -740,6 +1144,29 @@ def process_file(src_file):
     # Sammle Datei-Metadaten
     stat = os.stat(src_file)
 
+    # Extrahiere Named Entities aus dem Text
+    # Dies geschieht für ALLE Texte, egal ob kurz oder lang
+    print("Extrahiere Named Entities...")
+    entities = extract_entities_with_lmstudio(text, file_path=src_file, file_ext=file_ext)
+
+    # Extrahiere zusätzliche Entities aus dem Dateipfad
+    path_entities = extract_entities_from_path(src_file)
+
+    # Merge Pfad-Entities mit Text-Entities (ohne Duplikate)
+    for company in path_entities['companies']:
+        if company not in entities['companies']:
+            entities['companies'].append(company)
+
+    # Speichere Projektnamen separat (neues Feld)
+    entities['projects'] = path_entities['projects']
+
+    # Zeige gefundene Entities (wenn vorhanden)
+    entity_count = sum(len(v) for v in entities.values())
+    if entity_count > 0:
+        print(f"  → Gefunden: {len(entities['companies'])} Firmen, {len(entities['persons'])} Personen, "
+              f"{len(entities['institutions'])} Institutionen, {len(entities['organizations'])} Organisationen, "
+              f"{len(entities.get('projects', []))} Projekte")
+
     # Extrahiere Schlüsselbegriffe aus der Zusammenfassung
     # Die Schlüsselbegriffe sollten am Ende der Zusammenfassung stehen
     keywords = []
@@ -782,15 +1209,26 @@ def process_file(src_file):
                 # Entferne die Keyword-Zeile aus der Zusammenfassung
                 summary_text = '\n'.join(lines[:-1]).strip()
 
+    # Berechne Content-Hash für Änderungserkennung
+    content_hash = calculate_content_hash(src_file)
+
     metadata = {
         "path": rel_path,
         "ext": path_obj.suffix.lower(),
         "size": stat.st_size,
         "created": datetime.fromtimestamp(stat.st_ctime).isoformat(),
         "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+        "content_hash": content_hash,
         "chars": len(text),
         "summary": summary_text,
-        "keywords": keywords
+        "keywords": keywords,
+        "entities": {
+            "companies": entities['companies'],
+            "persons": entities['persons'],
+            "institutions": entities['institutions'],
+            "organizations": entities['organizations'],
+            "projects": entities.get('projects', [])
+        }
     }
 
     # Füge OCR-Info hinzu falls verfügbar
@@ -830,19 +1268,27 @@ def validate_json_file(json_path, src_file_path=None):
                 print(f"Fehlende Struktur in {json_path}: Feld '{field}' fehlt")
                 return False
 
-        # Prüfe Zeitstempel wenn Quelldatei angegeben wurde
+        # Prüfe Content-Hash wenn Quelldatei angegeben wurde (Hash-basierte Änderungserkennung)
         if src_file_path and os.path.exists(src_file_path):
             try:
-                stat = os.stat(src_file_path)
-                current_created = datetime.fromtimestamp(stat.st_ctime).isoformat()
-                current_modified = datetime.fromtimestamp(stat.st_mtime).isoformat()
+                # Wenn kein Hash in JSON vorhanden, nutze Zeitstempel (Fallback für alte JSON-Dateien)
+                if 'content_hash' not in data:
+                    stat = os.stat(src_file_path)
+                    current_created = datetime.fromtimestamp(stat.st_ctime).isoformat()
+                    current_modified = datetime.fromtimestamp(stat.st_mtime).isoformat()
 
-                # Vergleiche Zeitstempel
-                if data.get('created') != current_created or data.get('modified') != current_modified:
-                    print(f"Zeitstempel geändert in {json_path} - Neuverarbeitung erforderlich")
-                    return False
+                    # Vergleiche Zeitstempel
+                    if data.get('created') != current_created or data.get('modified') != current_modified:
+                        print(f"Zeitstempel geändert in {json_path} - Neuverarbeitung erforderlich")
+                        return False
+                else:
+                    # Hash-basierte Prüfung (bevorzugte Methode)
+                    current_hash = calculate_content_hash(src_file_path)
+                    if current_hash and data.get('content_hash') != current_hash:
+                        print(f"Dateiinhalt geändert in {json_path} - Neuverarbeitung erforderlich")
+                        return False
             except Exception as e:
-                print(f"Fehler beim Prüfen der Zeitstempel für {src_file_path}: {e}")
+                print(f"Fehler beim Prüfen der Dateiänderungen für {src_file_path}: {e}")
                 # Bei Fehler trotzdem als valide betrachten (sicherer)
 
         # Prüfe ob Summary sinnvoll ist (nicht leer, nicht nur Leerzeichen)
@@ -1171,6 +1617,8 @@ def walk_and_process():
     errors = 0
     recreated = 0
     ocr_count = 0  # Zähler für OCR-verarbeitete Dokumente
+    excluded = 0   # Zähler für ausgeschlossene Verzeichnisse
+    duplicates = 0  # Zähler für Duplikate
     start_time = time.time()
 
     for idx, full_path in enumerate(all_files, 1):
@@ -1192,7 +1640,27 @@ def walk_and_process():
                 return
 
         try:
-            # Prüfe ob bereits existiert und valide ist
+            # Schritt 1: Prüfe ob Pfad ausgeschlossen werden soll
+            if should_exclude_path(full_path):
+                excluded += 1
+                if excluded <= 10:  # Zeige nur erste 10
+                    print(f"Ausgeschlossen (Pattern-Match): {os.path.relpath(full_path, SRC_ROOT)}")
+                continue
+
+            # Schritt 2: Prüfe auf Duplikate (basierend auf Content-Hash)
+            try:
+                file_size = os.path.getsize(full_path)
+                is_dup, original_path = is_duplicate_file(full_path, file_size)
+                if is_dup:
+                    duplicates += 1
+                    if duplicates <= 10:  # Zeige nur erste 10
+                        print(f"Duplikat übersprungen: {os.path.relpath(full_path, SRC_ROOT)}")
+                        print(f"  → Original: {os.path.relpath(original_path, SRC_ROOT)}")
+                    continue
+            except OSError:
+                pass  # Bei Fehler: Fahre normal fort
+
+            # Schritt 3: Prüfe ob bereits existiert und valide ist
             rel_path = os.path.relpath(full_path, SRC_ROOT)
             dst_dir = os.path.join(DST_ROOT, os.path.dirname(rel_path))
             dst_file = os.path.join(dst_dir, os.path.basename(full_path) + ".json")
@@ -1231,7 +1699,8 @@ def walk_and_process():
                     estimated_remaining = avg_time_per_file * remaining_files
 
                     print(f"\n[{idx}/{total_files}] Fortschritt: {(idx/total_files)*100:.1f}%")
-                    print(f"Neu: {processed} | Neu erstellt: {recreated} | Übersprungen: {skipped} | Fehler: {errors} | OCR: {ocr_count}")
+                    print(f"Neu: {processed} | Neu erstellt: {recreated} | Übersprungen: {skipped} | Fehler: {errors}")
+                    print(f"Duplikate: {duplicates} | Ausgeschlossen: {excluded} | OCR: {ocr_count}")
                     print(f"Verstrichene Zeit: {format_time(elapsed)}")
                     print(f"Geschätzte Restzeit: {format_time(estimated_remaining)}")
                     print(f"Geschätzte Gesamtzeit: {format_time(elapsed + estimated_remaining)}")
@@ -1239,7 +1708,8 @@ def walk_and_process():
                     print("=" * 70)
                 else:
                     print(f"\n[{idx}/{total_files}] Fortschritt: {(idx/total_files)*100:.1f}%")
-                    print(f"Neu: {processed} | Neu erstellt: {recreated} | Übersprungen: {skipped} | Fehler: {errors} | OCR: {ocr_count}")
+                    print(f"Neu: {processed} | Neu erstellt: {recreated} | Übersprungen: {skipped} | Fehler: {errors}")
+                    print(f"Duplikate: {duplicates} | Ausgeschlossen: {excluded} | OCR: {ocr_count}")
                     print("=" * 70)
 
         except Exception as e:
@@ -1251,10 +1721,12 @@ def walk_and_process():
     print("\n" + "=" * 70)
     print("VERARBEITUNG ABGESCHLOSSEN")
     print("=" * 70)
-    print(f"Gesamt: {total_files} Dateien")
+    print(f"Gesamt gescannt: {total_files} Dateien")
     print(f"Neu verarbeitet: {processed}")
     print(f"Neu erstellt (vorher fehlerhaft): {recreated}")
     print(f"Übersprungen (valide): {skipped}")
+    print(f"Duplikate übersprungen: {duplicates}")
+    print(f"Ausgeschlossen (Pattern): {excluded}")
     print(f"Fehler: {errors}")
     print(f"Mit OCR verarbeitet: {ocr_count}")
     print(f"Gesamtzeit: {format_time(total_time)}")
@@ -1262,6 +1734,10 @@ def walk_and_process():
     actually_processed = processed + recreated
     if actually_processed > 0:
         print(f"Durchschnitt: {total_time/actually_processed:.2f}s pro Datei (nur verarbeitete)")
+    if duplicates > 0:
+        print(f"\nℹ Hinweis: {duplicates} Duplikate wurden automatisch erkannt und übersprungen")
+    if excluded > 0:
+        print(f"ℹ Hinweis: {excluded} Dateien in ausgeschlossenen Verzeichnissen übersprungen")
     print("=" * 70)
 
 def create_combined_database(max_size_mb=30, output_dir=None):
