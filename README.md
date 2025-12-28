@@ -1,7 +1,7 @@
 # FileInventory - OneDrive Dokumenten-Zusammenfassung (macOS)
 
-**Version:** 1.8.0
-**Datum:** 2025-12-25
+**Version:** 1.9.0
+**Datum:** 2025-12-28
 **Lizenz:** Proprietär
 
 ## Übersicht
@@ -13,6 +13,7 @@ FileInventory ist ein intelligentes Python-Tool zur automatischen Analyse und Zu
 - **Multiformat-Unterstützung**: PDF, Word (.docx/.doc), Excel (.xlsx/.xls/.xlsm/.xltx), PowerPoint (.pptx/.ppt), Text, Markdown und Bilder
 - **OCR-Unterstützung**: Automatische Texterkennung für gescannte PDFs mit Tesseract OCR
 - **RAG-Optimierung**: Wissensextraktion für semantische Suche mit Schlüsselbegriffen und strukturierter Zusammenfassung
+- **Kombinierte Datenbank**: Erstellt durchsuchbare JSON-Datenbanken für ChatGPT/Claude (NEU in v1.9.0)
 - **macOS-optimiert**: Native macOS-Unterstützung mit OneDrive-Integration
 - **LLM-basierte Analyse**: Intelligente Zusammenfassungen mit RAG-optimierten, dateityp-spezifischen Prompts
 - **Vision-Fähigkeit**: Bildanalyse und -beschreibung mittels multimodaler Modelle
@@ -243,6 +244,15 @@ python3 FileInventory.py --max-tokens 8192
 # Vollständig benutzerdefiniert
 python3 FileInventory.py --src ~/Docs --dst ~/Summaries --max-tokens 32768
 
+# Kombinierte Datenbank erstellen (empfohlen für ChatGPT/Claude)
+python3 FileInventory.py --create-database
+
+# Datenbank mit benutzerdefinierter Größe
+python3 FileInventory.py --create-database --max-database-size 50
+
+# Datenbank in benutzerdefiniertem Verzeichnis
+python3 FileInventory.py --create-database --database-output ~/MyDatabase
+
 # Standard-Verzeichnisse und -Einstellungen verwenden
 python3 FileInventory.py
 ```
@@ -256,6 +266,9 @@ python3 FileInventory.py
 | `--src VERZEICHNIS` | Quellverzeichnis für Dokumente | `~/OneDrive - Marc König Unternehmensberatung` |
 | `--dst VERZEICHNIS` | Zielverzeichnis für JSON-Dateien | `~/LLM` |
 | `--max-tokens TOKENS` | Maximale Context-Länge des Modells in Tokens | `262144` |
+| `--create-database` | Erstellt kombinierte JSON-Datenbank aus allen einzelnen JSON-Dateien | - |
+| `--database-output DIR` | Ausgabeverzeichnis für Datenbank-Dateien | `~/LLM/database` |
+| `--max-database-size MB` | Maximale Größe pro Datenbank-Datei in MB | `30` |
 
 ### Basis-Ausführung
 
@@ -308,7 +321,88 @@ Bitte wählen Sie (A/W/F):
 - **W**: Fehlerhafte Dateien werden übersprungen, keine weiteren Abfragen
 - **F**: Bei jedem Fehler erfolgt eine erneute Abfrage
 
-### Ausgabeformat
+### Kombinierte Datenbank erstellen (NEU in v1.9.0)
+
+Nach der Verarbeitung Ihrer Dokumente können Sie eine kombinierte JSON-Datenbank erstellen, die alle Zusammenfassungen in wenigen großen Dateien zusammenfasst. Dies ist ideal für die Verwendung mit ChatGPT oder Claude.
+
+#### Datenbank erstellen
+
+```bash
+# Aktiviere virtuelle Umgebung
+source .venv/bin/activate
+
+# Erstelle Datenbank mit Standard-Einstellungen (max 30 MB pro Datei)
+python3 FileInventory.py --create-database
+```
+
+#### Ausgabe
+
+Die Datenbank wird standardmäßig im Verzeichnis `~/LLM/database/` erstellt:
+
+```
+~/LLM/database/
+  ├── file_database_001.json  (10.19 MB, 6,283 Dokumente)
+```
+
+#### Datenbankstruktur
+
+Jede Datenbank-Datei enthält Metadaten und alle Dokumente:
+
+```json
+{
+  "metadata": {
+    "created": "2025-12-28T19:18:03.965074",
+    "source_directory": "/Users/fs_mku/OneDrive - Marc König Unternehmensberatung",
+    "json_directory": "/Users/fs_mku/LLM",
+    "script_version": "1.9.0",
+    "script_date": "2025-12-28",
+    "batch_number": 1,
+    "documents_in_batch": 6283,
+    "max_size_mb": 30
+  },
+  "documents": [
+    {
+      "path": "Projekte/Kunde_A/Beispieldokument.pdf",
+      "ext": ".pdf",
+      "size": 1048576,
+      "summary": "...",
+      "keywords": ["Projekt", "Kunde A", "..."]
+    },
+    ...
+  ]
+}
+```
+
+#### Verwendung mit ChatGPT/Claude
+
+1. **Lade die Datenbank-Datei hoch** zu ChatGPT oder Claude
+2. **Stelle Fragen** über Ihre Dokumente:
+   - "Suche alle Projekte mit dem Kunden X"
+   - "Welche Dokumente erwähnen digitale Transformation?"
+   - "Finde alle PDFs von Marc König"
+   - "Liste alle Dokumente mit dem Keyword 'Innovation' auf"
+
+#### Erweiterte Optionen
+
+```bash
+# Kleinere Dateien (z.B. 5 MB für bessere Uploads)
+python3 FileInventory.py --create-database --max-database-size 5
+
+# Benutzerdefiniertes Ausgabeverzeichnis
+python3 FileInventory.py --create-database --database-output ~/Desktop/Datenbank
+
+# Mit benutzerdefinierten Quell-Verzeichnissen
+python3 FileInventory.py --dst ~/Summaries --create-database
+```
+
+#### Vorteile der Datenbank
+
+- **Schnellere Uploads**: Eine große Datei statt tausende kleine
+- **Bessere Durchsuchbarkeit**: ChatGPT/Claude kann alle Dokumente auf einmal durchsuchen
+- **Metadaten**: Enthält Versionsinformationen und Verarbeitungsdetails
+- **Flexible Größe**: Automatische Aufteilung bei Überschreitung der max. Größe
+
+### Ausgabeformat (Einzelne JSON-Dateien)
 
 Für jede verarbeitete Datei wird eine JSON-Datei erstellt:
 
@@ -637,6 +731,18 @@ top_keywords = Counter(all_keywords).most_common(10)
 ---
 
 ## Versionsverlauf
+
+### Version 1.9.0 (2025-12-28)
+- **Neu**: `--create-database` Parameter zum Erstellen kombinierter JSON-Datenbanken
+- **Neu**: Automatische Aufteilung in mehrere Dateien basierend auf Größenlimit
+- **Neu**: `--database-output DIR` zur Angabe eines benutzerdefinierten Ausgabeverzeichnisses
+- **Neu**: `--max-database-size MB` zur Kontrolle der maximalen Datenbankdateigröße
+- **Neu**: Metadaten in Datenbank-Dateien (Version, Zeitstempel, Quellverzeichnisse)
+- **Neu**: Fortschrittsanzeige während der Datenbank-Erstellung
+- **Neu**: Detaillierte Statistiken nach Datenbank-Erstellung
+- **Verbessert**: Optimiert für ChatGPT/Claude-Integration
+- **Verbessert**: JSON-Struktur mit separaten Metadaten und Dokumenten-Arrays
+- **Dokumentiert**: Neue Sektion in README mit Beispielen und Best Practices
 
 ### Version 1.8.0 (2025-12-25)
 - **Neu**: Alphabetische Sortierung von Verzeichnissen und Dateien während der Verarbeitung

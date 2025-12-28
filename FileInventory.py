@@ -17,8 +17,8 @@ import argparse
 warnings.filterwarnings('ignore', category=UserWarning, module='openpyxl')
 
 # Version und Metadaten
-VERSION = "1.8.0"
-VERSION_DATE = "2025-12-25"
+VERSION = "1.11.0"
+VERSION_DATE = "2025-12-28"
 SCRIPT_NAME = "FileInventory - OneDrive Dokumenten-Zusammenfassung (macOS)"
 
 # Fehlerbehandlungsmodus: None = fragen, "skip" = weiter ohne Fragen, "ask" = weiter mit Fragen
@@ -44,6 +44,10 @@ MIN_IMAGE_SIZE = 10 * 1024  # 10 KB
 # - Größere Modelle (z.B. Qwen 2.5 14B): 32768
 # - Reasoning-Modelle (z.B. mistralai/ministral-3-14b-reasoning): 262144
 MAX_CONTEXT_TOKENS = 262144
+
+# Maximale Länge der Zusammenfassung in Zeichen
+# Wenn der Originaltext kürzer ist, wird er direkt kopiert
+SUMMARY_MAX_CHARS = 1500
 
 # Welche Dateitypen sollen verarbeitet werden?
 EXTENSIONS = {
@@ -335,18 +339,22 @@ def is_file_accessible(file_path):
         print(f"Warnung: Konnte Dateizugriff nicht prüfen für {file_path}: {e}")
         return False
 
-def get_prompt_for_filetype(file_ext):
+def get_prompt_for_filetype(file_ext, summary_max_chars=1500):
     """
     Gibt einen RAG-optimierten, dateityp-spezifischen Prompt zurück.
     Optimiert für semantische Suche und Wissensextraktion.
+
+    Args:
+        file_ext: Dateierweiterung
+        summary_max_chars: Maximale Länge der Zusammenfassung in Zeichen
     """
     # Basis-Prompt für RAG-Optimierung
-    base_prompt = """Du bist ein System zur Wissensextraktion für semantische Suche (RAG).
+    base_prompt = f"""Du bist ein System zur Wissensextraktion für semantische Suche (RAG).
 
 Fasse den folgenden Dateiinhalt so zusammen, dass er für spätere Fragen maximal gut auffindbar und nutzbar ist.
 
 REGELN:
-- Maximal 1000 Zeichen
+- Maximal {summary_max_chars} Zeichen
 - Sachlich, präzise, ohne Floskeln
 - Keine Meta-Kommentare (z. B. „Diese Datei beschreibt…", „Zusammenfassung:", „Das Dokument enthält…")
 - Keine Markdown-Formatierung (**, ##, -, etc.)
@@ -437,7 +445,10 @@ def summarize_image_with_lmstudio(image_path, file_ext):
         # Fallback: Gebe einen Platzhalter zurück
         return f"Bilddatei ({file_ext}). Vision-Analyse fehlgeschlagen: {str(e)[:100]}"
 
-def summarize_with_lmstudio(text, file_path=None, file_ext=None, max_chars=30000):
+# Globaler Lern-Cache für erfolgreiche Context-Größen
+_LEARNED_MAX_CHARS = {}
+
+def summarize_with_lmstudio(text, file_path=None, file_ext=None, max_chars=30000, summary_max_chars=1500):
     # Adaptive Textkürzung mit automatischem Retry bei Context-Overflow
     # ministral-3-14b-reasoning hat größeres Context-Fenster
     # Start mit ~30000 Zeichen (~7500 Tokens), bei Fehler schrittweise reduzieren
@@ -458,6 +469,11 @@ def summarize_with_lmstudio(text, file_path=None, file_ext=None, max_chars=30000
     if not text:
         raise ValueError("Text ist leer nach Bereinigung")
 
+    # Wenn der Text kürzer als die Zielgröße ist, kopiere ihn direkt
+    if len(text) <= summary_max_chars:
+        print(f"Text ({len(text)} Zeichen) ist kürzer als Zielgröße ({summary_max_chars}), kopiere Original")
+        return text
+
     # Versuche mit verschiedenen Textlängen, falls Context zu groß ist
     # Berechne retry_lengths basierend auf MAX_CONTEXT_TOKENS
     # Annahme: ~4 Zeichen pro Token (konservativ für deutsche Texte)
@@ -466,21 +482,42 @@ def summarize_with_lmstudio(text, file_path=None, file_ext=None, max_chars=30000
 
     actual_text_length = len(text)
 
-    # Erstelle Retry-Liste mit absteigenden Werten, aber nicht größer als der tatsächliche Text
-    retry_lengths = [
-        min(max_chars, actual_text_length),
-        min(int(max_chars * 0.67), actual_text_length),  # 2/3
-        min(int(max_chars * 0.47), actual_text_length),  # ~1/2
-        min(int(max_chars * 0.33), actual_text_length),  # 1/3
-        min(int(max_chars * 0.20), actual_text_length),  # 1/5
-        min(3000, actual_text_length)  # Minimum-Fallback
-    ]
+    # Lernlogik: Nutze erfolgreich getestete Größe als Startpunkt
+    learned_max = _LEARNED_MAX_CHARS.get(MODEL_NAME, None)
+    if learned_max and learned_max < max_chars:
+        # Starte mit 90% der gelernten Größe für Sicherheit
+        start_chars = int(learned_max * 0.9)
+        print(f"  → Nutze gelernte maximale Größe: {start_chars:,} Zeichen")
+    else:
+        start_chars = max_chars
+
+    # Erstelle intelligente Retry-Liste mit mehr Zwischenschritten
+    # Start mit der maximalen oder gelernten Größe, dann schrittweise reduzieren
+    retry_lengths = []
+
+    # Bestimme Basis für Schritte: entweder start_chars oder actual_text_length
+    base_chars = min(start_chars, actual_text_length)
+
+    # Erstelle Schritte: 100%, 85%, 70%, 55%, 40%, 30%, 20%, 15%, dann Minimum
+    # Diese Schritte gelten relativ zur Basis (entweder learned max oder actual length)
+    steps = [1.0, 0.85, 0.70, 0.55, 0.40, 0.30, 0.20, 0.15]
+    for step in steps:
+        chars = int(base_chars * step)
+        if chars > summary_max_chars:  # Sinnvolle Untergrenze
+            retry_lengths.append(chars)
+
+    # Minimum-Fallback
+    retry_lengths.append(min(3000, actual_text_length))
 
     # Entferne Duplikate und sortiere absteigend
     retry_lengths = sorted(list(set(retry_lengths)), reverse=True)
 
     # Hole dateityp-spezifischen Prompt
-    user_prompt = get_prompt_for_filetype(file_ext) if file_ext else get_prompt_for_filetype("")
+    user_prompt = get_prompt_for_filetype(file_ext, summary_max_chars) if file_ext else get_prompt_for_filetype("", summary_max_chars)
+
+    # Berechne max_tokens basierend auf Zielgröße
+    # ~2.5 Zeichen pro Token für deutsche Texte
+    max_tokens = int(summary_max_chars / 2.5) + 50  # +50 für Keywords
 
     for attempt, current_max_chars in enumerate(retry_lengths, 1):
         truncated_text = text[:current_max_chars]
@@ -498,7 +535,7 @@ def summarize_with_lmstudio(text, file_path=None, file_ext=None, max_chars=30000
                 },
             ],
             "temperature": 0.3,
-            "max_tokens": 400,  # Erhöht für ~1000 Zeichen Output
+            "max_tokens": max_tokens,  # Dynamisch basierend auf SUMMARY_MAX_CHARS
         }
 
         try:
@@ -512,8 +549,14 @@ def summarize_with_lmstudio(text, file_path=None, file_ext=None, max_chars=30000
             # Keine Kürzung - lasse vollständige Antwort vom Modell zu
             # Das Modell wurde instruiert, max 650 Zeichen zu verwenden
 
-            if attempt > 1:
-                print(f"  → Erfolgreich mit {current_max_chars} Zeichen (Versuch {attempt})")
+            # Lernlogik: Speichere erfolgreiche Größe
+            # Nur aktualisieren wenn größer als bisherige gelernte Größe
+            if current_max_chars > _LEARNED_MAX_CHARS.get(MODEL_NAME, 0):
+                _LEARNED_MAX_CHARS[MODEL_NAME] = current_max_chars
+                if attempt > 1:
+                    print(f"  → Erfolgreich mit {current_max_chars:,} Zeichen (Versuch {attempt}) - Größe gespeichert")
+            elif attempt > 1:
+                print(f"  → Erfolgreich mit {current_max_chars:,} Zeichen (Versuch {attempt})")
 
             return summary
 
@@ -670,7 +713,7 @@ def process_file(src_file):
             return None
 
         # Übergebe file_path und file_ext für dateityp-spezifische Verarbeitung
-        summary = summarize_with_lmstudio(text, file_path=src_file, file_ext=file_ext)
+        summary = summarize_with_lmstudio(text, file_path=src_file, file_ext=file_ext, summary_max_chars=SUMMARY_MAX_CHARS)
 
         # Zeige die ersten 100 Zeichen der Zusammenfassung
         summary_preview = summary[:100] + "..." if len(summary) > 100 else summary
@@ -1221,6 +1264,182 @@ def walk_and_process():
         print(f"Durchschnitt: {total_time/actually_processed:.2f}s pro Datei (nur verarbeitete)")
     print("=" * 70)
 
+def create_combined_database(max_size_mb=30, output_dir=None):
+    """
+    Erstellt kombinierte JSON-Datenbank-Dateien aus allen einzelnen JSON-Dateien.
+    Teilt die Datenbank in mehrere Dateien auf, wenn die Größe max_size_mb überschreitet.
+
+    Args:
+        max_size_mb: Maximale Größe pro Datenbankdatei in MB
+        output_dir: Ausgabeverzeichnis für Datenbankdateien (Standard: DST_ROOT/database)
+    """
+    if output_dir is None:
+        output_dir = os.path.join(DST_ROOT, "database")
+
+    # Erstelle Ausgabeverzeichnis
+    os.makedirs(output_dir, exist_ok=True)
+
+    print("\n" + "=" * 80)
+    print("ERSTELLE KOMBINIERTE JSON-DATENBANK")
+    print("=" * 80)
+    print(f"Quellverzeichnis: {DST_ROOT}")
+    print(f"Ausgabeverzeichnis: {output_dir}")
+    print(f"Maximale Größe pro Datei: {max_size_mb} MB")
+    print("=" * 80)
+
+    # Sammle alle JSON-Dateien
+    print("\nSammle JSON-Dateien...")
+    all_json_files = []
+    for root, dirs, files in os.walk(DST_ROOT):
+        # Überspringe das database-Verzeichnis selbst
+        if root.startswith(output_dir):
+            continue
+
+        # Sortiere für konsistente Reihenfolge
+        dirs.sort()
+        files.sort()
+
+        for name in files:
+            if name.endswith('.json'):
+                full_path = os.path.join(root, name)
+                all_json_files.append(full_path)
+
+    total_files = len(all_json_files)
+    print(f"Gefunden: {total_files:,} JSON-Dateien")
+
+    if total_files == 0:
+        print("Keine JSON-Dateien gefunden. Bitte führen Sie zuerst die normale Verarbeitung durch.")
+        return
+
+    # Lade und kombiniere JSON-Dateien
+    print("\nLade und kombiniere Dateien...")
+    max_size_bytes = max_size_mb * 1024 * 1024
+
+    current_batch = []
+    current_size = 0
+    batch_number = 1
+    total_size = 0
+    failed_files = 0
+
+    # Metadaten für die Datenbank
+    database_metadata = {
+        "created": datetime.now().isoformat(),
+        "source_directory": SRC_ROOT,
+        "json_directory": DST_ROOT,
+        "total_documents": 0,
+        "script_version": VERSION,
+        "script_date": VERSION_DATE
+    }
+
+    start_time = time.time()
+
+    for idx, json_file in enumerate(all_json_files, 1):
+        try:
+            with open(json_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+
+            # Schätze die Größe dieses Eintrags
+            entry_json = json.dumps(data, ensure_ascii=False)
+            entry_size = len(entry_json.encode('utf-8'))
+
+            # Prüfe ob wir eine neue Datei starten müssen
+            # Reserviere 2000 Bytes für Metadaten und JSON-Struktur
+            if current_size + entry_size + 2000 > max_size_bytes and current_batch:
+                # Schreibe aktuelle Batch
+                write_database_file(output_dir, batch_number, current_batch, database_metadata, max_size_mb)
+                total_size += current_size
+                batch_number += 1
+                current_batch = []
+                current_size = 0
+
+            # Füge zu aktueller Batch hinzu
+            current_batch.append(data)
+            current_size += entry_size
+
+            # Fortschrittsanzeige
+            if idx % 100 == 0 or idx == total_files:
+                progress = (idx / total_files) * 100
+                print(f"\rFortschritt: {idx:,}/{total_files:,} ({progress:.1f}%) - "
+                      f"Batch {batch_number}: {len(current_batch):,} Dateien, "
+                      f"{current_size / (1024*1024):.2f} MB", end="", flush=True)
+
+        except json.JSONDecodeError as e:
+            failed_files += 1
+            print(f"\nWarnung: Fehlerhafte JSON-Datei übersprungen: {json_file}")
+            print(f"  Fehler: {e}")
+        except Exception as e:
+            failed_files += 1
+            print(f"\nWarnung: Fehler beim Lesen von {json_file}: {e}")
+
+    print()  # Neue Zeile nach Fortschrittsanzeige
+
+    # Schreibe letzte Batch
+    if current_batch:
+        write_database_file(output_dir, batch_number, current_batch, database_metadata, max_size_mb)
+        total_size += current_size
+
+    # Abschlussbericht
+    elapsed = time.time() - start_time
+    total_documents = sum(len(current_batch) if i == batch_number else 0 for i in range(1, batch_number + 1))
+
+    # Berechne korrekte Gesamtanzahl Dokumente
+    total_documents = total_files - failed_files
+
+    print("\n" + "=" * 80)
+    print("DATENBANK-ERSTELLUNG ABGESCHLOSSEN")
+    print("=" * 80)
+    print(f"Verarbeitete Dokumente: {total_documents:,}")
+    print(f"Fehlerhafte Dateien: {failed_files:,}")
+    print(f"Anzahl Datenbank-Dateien: {batch_number}")
+    print(f"Gesamtgröße: {total_size / (1024*1024):.2f} MB")
+    print(f"Durchschnittliche Größe pro Datei: {(total_size / batch_number) / (1024*1024):.2f} MB")
+    print(f"Ausgabeverzeichnis: {output_dir}")
+    print(f"Laufzeit: {format_time(elapsed)}")
+    print("=" * 80)
+
+    # Liste der erstellten Dateien
+    print("\nErstellte Datenbank-Dateien:")
+    for i in range(1, batch_number + 1):
+        filename = f"file_database_{i:03d}.json"
+        filepath = os.path.join(output_dir, filename)
+        if os.path.exists(filepath):
+            size_mb = os.path.getsize(filepath) / (1024 * 1024)
+            print(f"  {filename}: {size_mb:.2f} MB")
+    print("=" * 80)
+
+def write_database_file(output_dir, batch_number, documents, metadata, max_size_mb):
+    """
+    Schreibt eine Datenbank-Datei mit Metadaten und Dokumenten.
+
+    Args:
+        output_dir: Ausgabeverzeichnis
+        batch_number: Nummer der Batch (für Dateinamen)
+        documents: Liste der Dokumente
+        metadata: Metadaten für die Datenbank
+        max_size_mb: Maximale Größe (für Metadaten)
+    """
+    filename = f"file_database_{batch_number:03d}.json"
+    filepath = os.path.join(output_dir, filename)
+
+    # Erweitere Metadaten
+    batch_metadata = metadata.copy()
+    batch_metadata["batch_number"] = batch_number
+    batch_metadata["documents_in_batch"] = len(documents)
+    batch_metadata["max_size_mb"] = max_size_mb
+
+    # Erstelle Datenbank-Struktur
+    database = {
+        "metadata": batch_metadata,
+        "documents": documents
+    }
+
+    # Schreibe Datei
+    with open(filepath, 'w', encoding='utf-8') as f:
+        json.dump(database, f, ensure_ascii=False, indent=2)
+
+    size_mb = os.path.getsize(filepath) / (1024 * 1024)
+    print(f"\n✓ Erstellt: {filename} ({size_mb:.2f} MB, {len(documents):,} Dokumente)")
+
 def parse_arguments():
     """Parse und validiere Kommandozeilenargumente."""
     parser = argparse.ArgumentParser(
@@ -1237,8 +1456,20 @@ Beispiele:
   {sys.argv[0]} --max-tokens 8192
     Verwendet kleineres Modell mit 8k Tokens Context
 
-  {sys.argv[0]} --src ~/Docs --dst ~/Summaries --max-tokens 32768
+  {sys.argv[0]} --summary-max-chars 2000
+    Erstellt längere Zusammenfassungen (max 2000 Zeichen)
+
+  {sys.argv[0]} --src ~/Docs --dst ~/Summaries --max-tokens 32768 --summary-max-chars 2000
     Vollständig benutzerdefinierte Konfiguration
+
+  {sys.argv[0]} --create-database
+    Erstellt kombinierte Datenbank aus allen JSON-Dateien (Standard: max 30 MB pro Datei)
+
+  {sys.argv[0]} --create-database --max-database-size 50
+    Erstellt Datenbank mit max 50 MB pro Datei
+
+  {sys.argv[0]} --create-database --database-output ~/MyDatabase
+    Erstellt Datenbank in benutzerdefiniertem Verzeichnis
 
   {sys.argv[0]} --version
     Zeigt Versionsinformation an
@@ -1279,9 +1510,37 @@ Weitere Informationen:
     )
 
     parser.add_argument(
+        '--summary-max-chars',
+        type=int,
+        metavar='CHARS',
+        help=f'Maximale Länge der Zusammenfassung in Zeichen. Text kürzer als dieser Wert wird direkt kopiert. (Standard: {SUMMARY_MAX_CHARS})'
+    )
+
+    parser.add_argument(
         '--version',
         action='version',
         version=f'{SCRIPT_NAME}\nVersion: {VERSION}\nDatum: {VERSION_DATE}'
+    )
+
+    parser.add_argument(
+        '--create-database',
+        action='store_true',
+        help='Erstellt eine kombinierte JSON-Datenbank aus allen einzelnen JSON-Dateien (max. 30 MB pro Datei)'
+    )
+
+    parser.add_argument(
+        '--database-output',
+        type=str,
+        metavar='DIR',
+        help='Ausgabeverzeichnis für die Datenbank-Dateien (Standard: DST_ROOT/database)'
+    )
+
+    parser.add_argument(
+        '--max-database-size',
+        type=int,
+        metavar='MB',
+        default=30,
+        help='Maximale Größe pro Datenbank-Datei in MB (Standard: 30)'
     )
 
     return parser.parse_args()
@@ -1303,5 +1562,21 @@ if __name__ == "__main__":
         MAX_CONTEXT_TOKENS = args.max_tokens
         # Aktualisiere die globale Variable
         globals()['MAX_CONTEXT_TOKENS'] = MAX_CONTEXT_TOKENS
+    if args.summary_max_chars:
+        SUMMARY_MAX_CHARS = args.summary_max_chars
+        # Aktualisiere die globale Variable
+        globals()['SUMMARY_MAX_CHARS'] = SUMMARY_MAX_CHARS
 
-    walk_and_process()
+    # Prüfe ob Datenbank-Erstellung gewünscht ist
+    if args.create_database:
+        # Erstelle kombinierte Datenbank
+        output_dir = args.database_output if args.database_output else None
+        if output_dir:
+            output_dir = os.path.expanduser(output_dir)
+        create_combined_database(
+            max_size_mb=args.max_database_size,
+            output_dir=output_dir
+        )
+    else:
+        # Normale Verarbeitung
+        walk_and_process()
