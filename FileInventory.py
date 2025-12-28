@@ -17,7 +17,7 @@ import argparse
 warnings.filterwarnings('ignore', category=UserWarning, module='openpyxl')
 
 # Version und Metadaten
-VERSION = "1.16.0"
+VERSION = "1.16.1"
 VERSION_DATE = "2025-12-28"
 SCRIPT_NAME = "FileInventory - OneDrive Dokumenten-Zusammenfassung (macOS)"
 
@@ -819,6 +819,10 @@ def summarize_image_with_lmstudio(image_path, file_ext):
             "model": MODEL_NAME,
             "messages": [
                 {
+                    "role": "system",
+                    "content": "Du bist ein Wissensextraktionssystem für semantische Suche. Erstelle informationsdichte Zusammenfassungen in reinem Fließtext ohne Meta-Kommentare, ohne Markdown-Formatierung und ohne Überschriften. Fokussiere auf Fakten, Zahlen, Namen und Fachbegriffe. Beginne direkt mit dem Inhalt. WICHTIG: Gib KEINE Gedankenprozesse oder [THINK]-Tags aus, nur die finale Zusammenfassung."
+                },
+                {
                     "role": "user",
                     "content": [
                         {"type": "text", "text": user_prompt},
@@ -841,7 +845,17 @@ def summarize_image_with_lmstudio(image_path, file_ext):
         data = resp.json()
         summary = data["choices"][0]["message"]["content"]
 
-        # Keine Kürzung - lasse vollständige Antwort zu
+        # Entferne [THINK] Tags von Reasoning-Modellen
+        # Reasoning-Modelle wie ministral-3-14b-reasoning umschließen ihre Gedanken mit [THINK]...[/THINK]
+        import re
+        # Entferne alles zwischen [THINK] und [/THINK]
+        summary = re.sub(r'\[THINK\].*?\[/THINK\]', '', summary, flags=re.DOTALL)
+        # Entferne verbleibende einzelne Tags
+        summary = summary.replace('[THINK]', '').replace('[/THINK]', '')
+        # Bereinige mehrfache Leerzeichen und Zeilenumbrüche
+        summary = re.sub(r'\n{3,}', '\n\n', summary)  # Max 2 Zeilenumbrüche
+        summary = summary.strip()
+
         return summary
 
     except Exception as e:
