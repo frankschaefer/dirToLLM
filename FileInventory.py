@@ -17,7 +17,7 @@ import argparse
 warnings.filterwarnings('ignore', category=UserWarning, module='openpyxl')
 
 # Version und Metadaten
-VERSION = "1.15.0"
+VERSION = "1.16.0"
 VERSION_DATE = "2025-12-28"
 SCRIPT_NAME = "FileInventory - OneDrive Dokumenten-Zusammenfassung (macOS)"
 
@@ -850,6 +850,8 @@ def summarize_image_with_lmstudio(image_path, file_ext):
         return f"Bilddatei ({file_ext}). Vision-Analyse fehlgeschlagen: {str(e)[:100]}"
 
 # Globaler Lern-Cache für erfolgreiche Context-Größen
+# Strategie: Graduelle Aufwärts-Exploration mit adaptivem Lernen
+# Struktur: {model_name: {'current_max': int, 'successes': [int], 'consecutive_ok': int, 'last_failed': int}}
 _LEARNED_MAX_CHARS = {}
 
 def summarize_with_lmstudio(text, file_path=None, file_ext=None, max_chars=30000, summary_max_chars=1500):
@@ -886,34 +888,61 @@ def summarize_with_lmstudio(text, file_path=None, file_ext=None, max_chars=30000
 
     actual_text_length = len(text)
 
-    # Lernlogik: Nutze erfolgreich getestete Größe als Startpunkt
-    learned_max = _LEARNED_MAX_CHARS.get(MODEL_NAME, None)
-    if learned_max and learned_max < max_chars:
-        # Starte mit 90% der gelernten Größe für Sicherheit
-        start_chars = int(learned_max * 0.9)
-        print(f"  → Nutze gelernte maximale Größe: {start_chars:,} Zeichen")
-    else:
-        start_chars = max_chars
+    # Adaptive Lernlogik mit gradueller Aufwärts-Exploration
+    global _LEARNED_MAX_CHARS
 
-    # Erstelle intelligente Retry-Liste mit mehr Zwischenschritten
-    # Start mit der maximalen oder gelernten Größe, dann schrittweise reduzieren
+    # Initialisiere Lern-Struktur für dieses Modell
+    if MODEL_NAME not in _LEARNED_MAX_CHARS:
+        _LEARNED_MAX_CHARS[MODEL_NAME] = {
+            'current_max': max_chars // 2,  # Start konservativ bei 50% vom Maximum
+            'successes': [],                # Liste der letzten 10 erfolgreichen Größen
+            'consecutive_ok': 0,            # Zähler für aufeinanderfolgende Erfolge
+            'last_failed': None             # Letzte fehlgeschlagene Größe (obere Grenze)
+        }
+
+    learned_data = _LEARNED_MAX_CHARS[MODEL_NAME]
+
+    # Berechne Startpunkt basierend auf Lernhistorie
+    # Wenn wir mehrere Erfolge hatten, versuche schrittweise nach oben zu gehen
+    if learned_data['consecutive_ok'] >= 3:
+        # Nach 3 aufeinanderfolgenden Erfolgen: Erhöhe um 10%
+        exploration_max = int(learned_data['current_max'] * 1.10)
+        # Aber nicht über bekannte Fehlergrenze hinaus
+        if learned_data['last_failed']:
+            exploration_max = min(exploration_max, int(learned_data['last_failed'] * 0.95))
+        else:
+            exploration_max = min(exploration_max, max_chars)
+
+        print(f"  → 🔼 Exploration: Teste größeren Context ({exploration_max:,} Zeichen, +10%)")
+        start_chars = exploration_max
+    else:
+        # Nutze aktuell bekannte sichere Größe
+        start_chars = learned_data['current_max']
+        if learned_data['successes']:
+            avg_success = int(sum(learned_data['successes']) / len(learned_data['successes']))
+            print(f"  → Nutze gelernte Größe: {start_chars:,} Zeichen (Ø {avg_success:,})")
+
+    # Erstelle Retry-Liste: Start mit optimistischer Größe, dann sanfte Reduktion
     retry_lengths = []
 
-    # Bestimme Basis für Schritte: entweder start_chars oder actual_text_length
+    # Primärversuch: Exploration oder gelernte Größe
     base_chars = min(start_chars, actual_text_length)
+    retry_lengths.append(base_chars)
 
-    # Erstelle Schritte: 100%, 85%, 70%, 55%, 40%, 30%, 20%, 15%, dann Minimum
-    # Diese Schritte gelten relativ zur Basis (entweder learned max oder actual length)
-    steps = [1.0, 0.85, 0.70, 0.55, 0.40, 0.30, 0.20, 0.15]
-    for step in steps:
+    # Fallback-Schritte bei Fehler: -15%, -30%, -45%, -60%, dann drastischer
+    # Sanftere Schritte als vorher für bessere Konvergenz
+    fallback_steps = [0.85, 0.70, 0.55, 0.40, 0.30, 0.20]
+    for step in fallback_steps:
         chars = int(base_chars * step)
-        if chars > summary_max_chars:  # Sinnvolle Untergrenze
+        if chars > summary_max_chars and chars not in retry_lengths:
             retry_lengths.append(chars)
 
-    # Minimum-Fallback
-    retry_lengths.append(min(3000, actual_text_length))
+    # Absolutes Minimum als letzte Rettung
+    min_fallback = min(3000, actual_text_length)
+    if min_fallback not in retry_lengths:
+        retry_lengths.append(min_fallback)
 
-    # Entferne Duplikate und sortiere absteigend
+    # Sortiere absteigend
     retry_lengths = sorted(list(set(retry_lengths)), reverse=True)
 
     # Hole dateityp-spezifischen Prompt
@@ -950,17 +979,32 @@ def summarize_with_lmstudio(text, file_path=None, file_ext=None, max_chars=30000
             data = resp.json()
             summary = data["choices"][0]["message"]["content"]
 
-            # Keine Kürzung - lasse vollständige Antwort vom Modell zu
-            # Das Modell wurde instruiert, max 650 Zeichen zu verwenden
+            # Adaptive Lernlogik: Aktualisiere basierend auf Erfolg
+            learned_data = _LEARNED_MAX_CHARS[MODEL_NAME]
 
-            # Lernlogik: Speichere erfolgreiche Größe
-            # Nur aktualisieren wenn größer als bisherige gelernte Größe
-            if current_max_chars > _LEARNED_MAX_CHARS.get(MODEL_NAME, 0):
-                _LEARNED_MAX_CHARS[MODEL_NAME] = current_max_chars
-                if attempt > 1:
-                    print(f"  → Erfolgreich mit {current_max_chars:,} Zeichen (Versuch {attempt}) - Größe gespeichert")
-            elif attempt > 1:
-                print(f"  → Erfolgreich mit {current_max_chars:,} Zeichen (Versuch {attempt})")
+            if attempt == 1:
+                # Erfolg beim ersten Versuch
+                learned_data['consecutive_ok'] += 1
+
+                # Bei Exploration: Aktualisiere current_max nach oben
+                if current_max_chars > learned_data['current_max']:
+                    old_max = learned_data['current_max']
+                    learned_data['current_max'] = current_max_chars
+                    print(f"  ✓ Erfolg bei Exploration! Neue Grenze: {current_max_chars:,} (vorher: {old_max:,})")
+                else:
+                    print(f"  ✓ Erfolg mit {current_max_chars:,} Zeichen")
+
+            else:
+                # Erfolg nach Retry - Reset consecutive counter
+                learned_data['consecutive_ok'] = 0
+                # Erfolg bei niedrigerer Größe: Aktualisiere current_max konservativ
+                learned_data['current_max'] = current_max_chars
+                print(f"  ✓ Erfolgreich mit {current_max_chars:,} Zeichen (Versuch {attempt})")
+
+            # Speichere in Success-Historie (behalte nur letzte 10)
+            learned_data['successes'].append(current_max_chars)
+            if len(learned_data['successes']) > 10:
+                learned_data['successes'].pop(0)
 
             return summary
 
@@ -978,11 +1022,21 @@ def summarize_with_lmstudio(text, file_path=None, file_ext=None, max_chars=30000
                 )
 
                 if is_context_error:
+                    # Lernlogik: Speichere Fehlergrenze
+                    learned_data = _LEARNED_MAX_CHARS[MODEL_NAME]
+
+                    # Merke diese Größe als "zu groß"
+                    if learned_data['last_failed'] is None or current_max_chars < learned_data['last_failed']:
+                        learned_data['last_failed'] = current_max_chars
+
+                    # Reset consecutive successes
+                    learned_data['consecutive_ok'] = 0
+
                     if attempt < len(retry_lengths):
                         # Berechne geschätzte Tokens für Debug-Ausgabe
                         estimated_tokens = current_max_chars // 4
-                        print(f"  → Context/Token-Fehler ({current_max_chars:,} Zeichen ≈ {estimated_tokens:,} Tokens), versuche mit weniger...")
-                        print(f"     LLM-Fehler: {error_msg[:100]}...")  # Erste 100 Zeichen der Fehlermeldung
+                        print(f"  ✗ Context-Limit erreicht ({current_max_chars:,} Zeichen ≈ {estimated_tokens:,} Tokens)")
+                        print(f"     Grenze gespeichert, versuche mit weniger...")
                         continue  # Nächster Versuch mit weniger Text
                     else:
                         print(f"  → Alle Retry-Versuche fehlgeschlagen")
