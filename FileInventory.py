@@ -17,7 +17,7 @@ import argparse
 warnings.filterwarnings('ignore', category=UserWarning, module='openpyxl')
 
 # Version und Metadaten
-VERSION = "1.16.1"
+VERSION = "1.16.2"
 VERSION_DATE = "2025-12-28"
 SCRIPT_NAME = "FileInventory - OneDrive Dokumenten-Zusammenfassung (macOS)"
 
@@ -537,7 +537,12 @@ STRUKTUR (fließender Text ohne Überschriften):
 - Welche Inhalte/Daten/Logik sind enthalten?
 - Was macht es besonders oder relevant?
 
-Abschließend: Kommagetrennte Liste zentraler Schlüsselbegriffe.
+PFLICHTFELD - KEYWORDS (auf neuer Zeile am Ende):
+Die letzte Zeile MUSS folgendes Format haben:
+Schlüsselbegriffe: Begriff1, Begriff2, Begriff3, Begriff4, Begriff5
+
+Mindestens 3-8 zentrale Fachbegriffe, Technologien oder Themen als kommagetrennte Liste.
+Die Keyword-Zeile MUSS mit "Schlüsselbegriffe:" beginnen.
 
 WICHTIG: Antworte AUF DEUTSCH. Beginne direkt mit dem Inhalt, ohne Einleitung."""
 
