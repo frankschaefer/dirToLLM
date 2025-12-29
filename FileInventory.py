@@ -17,7 +17,7 @@ import argparse
 warnings.filterwarnings('ignore', category=UserWarning, module='openpyxl')
 
 # Version und Metadaten
-VERSION = "1.17.0"
+VERSION = "1.17.1"
 VERSION_DATE = "2025-12-28"
 SCRIPT_NAME = "FileInventory - OneDrive Dokumenten-Zusammenfassung (macOS)"
 
@@ -476,12 +476,14 @@ def extract_contact_info_from_text(text):
 
     # Telefonnummer-Extraktion (verschiedene Formate)
     # Deutsche Formate: +49, 0049, (0), mit/ohne Leerzeichen, Bindestriche, Klammern
+    # WICHTIG: Strenge Pattern um False Positives zu vermeiden (z.B. Projektnummern)
     phone_patterns = [
-        r'\+49[\s\-]?\d{2,4}[\s\-]?\d{3,9}',  # +49 30 12345678
-        r'0049[\s\-]?\d{2,4}[\s\-]?\d{3,9}',  # 0049 30 12345678
-        r'\(0\d{2,4}\)[\s\-]?\d{3,9}',        # (030) 12345678
-        r'0\d{2,4}[\s\-/]\d{3,9}',            # 030/12345678 oder 030-12345678
-        r'\d{3,4}[\s\-]\d{6,8}',              # 030 12345678
+        r'\+49[\s\-]?\(?\d{2,4}\)?[\s\-]?\d{3,10}',  # +49 30 12345678 oder +49(30)12345678
+        r'\+49[\s\-]?\d{2,4}[\s\-/]\d{6,10}',        # +49 30/12345678
+        r'0049[\s\-]?\d{2,4}[\s\-]?\d{6,10}',        # 0049 30 12345678
+        r'\(0\d{2,4}\)[\s\-]?\d{6,10}',              # (030) 12345678 (Mindest 6 Ziffern nach Vorwahl!)
+        r'\b0\d{2,4}[\s\-/]\d{6,10}\b',              # 030/12345678 (Mindest 6 Ziffern!)
+        r'\b0\d{9,11}\b',                             # 03012345678 (ohne Separator, mind. 10 Ziffern)
     ]
 
     phone_numbers = []
@@ -494,11 +496,19 @@ def extract_contact_info_from_text(text):
     for phone in phone_numbers:
         # Normalisiere: Entferne Leerzeichen für Vergleich
         normalized = re.sub(r'[\s\-/()]', '', phone)
-        # Mindestlänge 6 Ziffern
-        if len(re.sub(r'\D', '', normalized)) >= 6:
-            # Behalte Originalformat für Lesbarkeit
-            if phone not in cleaned_phones:
-                cleaned_phones.append(phone)
+        digits_only = re.sub(r'\D', '', normalized)
+
+        # Strikte Validierung:
+        # - Mindestens 8 Ziffern (echte Telefonnummern)
+        # - Nicht nur 4-stellige Jahreszahlen (z.B. "2024")
+        # - Nicht kurze Nummern wie "091-2024" (nur 7 Ziffern ohne führende 0)
+        if len(digits_only) >= 8:
+            # Prüfe ob es wie eine echte Telefonnummer aussieht
+            # Beginnt mit 0, +49, oder 0049?
+            if digits_only.startswith('0') or digits_only.startswith('49'):
+                # Behalte Originalformat für Lesbarkeit
+                if phone not in cleaned_phones:
+                    cleaned_phones.append(phone)
 
     contact_info['phone_numbers'] = cleaned_phones
 
@@ -1919,12 +1929,16 @@ def walk_and_process():
             if idx > 0:
                 # Berechne Durchschnitt nur für tatsächlich verarbeitete Dateien
                 actually_processed = processed + recreated
+                # Zeige aktuellen Dateipfad (relativ für bessere Lesbarkeit)
+                current_rel_path = os.path.relpath(full_path, SRC_ROOT)
+                print(f"\n📄 Datei: {current_rel_path}")
+
                 if actually_processed > 0:
                     avg_time_per_file = elapsed / actually_processed
                     remaining_files = total_files - idx
                     estimated_remaining = avg_time_per_file * remaining_files
 
-                    print(f"\n[{idx}/{total_files}] Fortschritt: {(idx/total_files)*100:.1f}%")
+                    print(f"[{idx}/{total_files}] Fortschritt: {(idx/total_files)*100:.1f}%")
                     print(f"Neu: {processed} | Neu erstellt: {recreated} | Übersprungen: {skipped} | Fehler: {errors}")
                     print(f"Duplikate: {duplicates} | Ausgeschlossen: {excluded} | OCR: {ocr_count}")
                     print(f"Verstrichene Zeit: {format_time(elapsed)}")
@@ -1933,7 +1947,7 @@ def walk_and_process():
                     print(f"Durchschnitt: {avg_time_per_file:.2f}s pro Datei")
                     print("=" * 70)
                 else:
-                    print(f"\n[{idx}/{total_files}] Fortschritt: {(idx/total_files)*100:.1f}%")
+                    print(f"[{idx}/{total_files}] Fortschritt: {(idx/total_files)*100:.1f}%")
                     print(f"Neu: {processed} | Neu erstellt: {recreated} | Übersprungen: {skipped} | Fehler: {errors}")
                     print(f"Duplikate: {duplicates} | Ausgeschlossen: {excluded} | OCR: {ocr_count}")
                     print("=" * 70)
