@@ -17,8 +17,8 @@ import argparse
 warnings.filterwarnings('ignore', category=UserWarning, module='openpyxl')
 
 # Version und Metadaten
-VERSION = "1.17.2"
-VERSION_DATE = "2025-12-28"
+VERSION = "1.17.3"
+VERSION_DATE = "2025-12-29"
 SCRIPT_NAME = "FileInventory - OneDrive Dokumenten-Zusammenfassung (macOS)"
 
 # Fehlerbehandlungsmodus: None = fragen, "skip" = weiter ohne Fragen, "ask" = weiter mit Fragen
@@ -464,15 +464,50 @@ def extract_contact_info_from_text(text):
 
     # URL-Extraktion
     # Findet http(s)://, www., und gängige Domains
-    url_pattern = r'(?:https?://|www\.)[^\s<>"{}|\\^`\[\]]+'
-    urls = re.findall(url_pattern, text, re.IGNORECASE)
-    contact_info['urls'] = list(set(urls))  # Duplikate entfernen
+    # WICHTIG: Schließt Satzzeichen am Ende aus und stoppt bei @-Zeichen (E-Mail-Grenze)
+    url_pattern = r'(?:https?://|www\.)(?:[A-Za-z0-9\-._~:/?#\[\]!$&\'()*+,;=%]+[A-Za-z0-9\-_~/?#\[\]$&*+=%]|[A-Za-z0-9\-._~:/?#\[\]!$&\'()*+,;=%])'
+    raw_urls = re.findall(url_pattern, text, re.IGNORECASE)
+
+    # Bereinige URLs: Entferne trailing Satzzeichen und @ (stoppt bei E-Mail)
+    cleaned_urls = []
+    for url in raw_urls:
+        # Stoppe bei @ (trennt URL von E-Mail)
+        if '@' in url:
+            url = url.split('@')[0]
+        # Entferne trailing Satzzeichen: ), ., ,, ;, :, !, und -Buchstaben (vor E-Mail local part)
+        url = re.sub(r'[).,;:!]+$', '', url)
+        # Entferne "-Wort" Pattern am Ende (z.B. "-Hallo" vor E-Mail)
+        url = re.sub(r'-[A-Za-z]+$', '', url)
+        # Nur URLs mit mindestens einem . im Domain-Teil
+        if '.' in url and len(url) > 5:
+            cleaned_urls.append(url)
+
+    contact_info['urls'] = list(set(cleaned_urls))  # Duplikate entfernen
 
     # E-Mail-Extraktion
-    # Standard E-Mail-Pattern
-    email_pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
-    emails = re.findall(email_pattern, text)
-    contact_info['emails'] = list(set(emails))
+    # WICHTIG: Striktes Pattern - nur alphanumerische Zeichen, ., _, %, +, - im local part
+    # Kein www. oder andere URL-Prefixe vor dem @
+    email_pattern = r'\b[A-Za-z0-9][A-Za-z0-9._%+-]*@[A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z]{2,}\b'
+    raw_emails = re.findall(email_pattern, text)
+
+    # Bereinige E-Mails: Entferne ungültige Prefixe
+    cleaned_emails = []
+    for email in raw_emails:
+        # Prüfe ob URL-Muster im local part (www., http)
+        local_part = email.split('@')[0]
+        if 'www.' in local_part.lower() or 'http' in local_part.lower():
+            # Extrahiere nur den Teil nach dem letzten '-' oder Leerzeichen
+            # z.B. "BOOKPLAYGmbH-www.book-play.de-Hallo@book-play.de" -> "Hallo@book-play.de"
+            parts = re.split(r'[-\s]', local_part)
+            if parts:
+                local_part = parts[-1]
+                email = f"{local_part}@{email.split('@')[1]}"
+
+        # Validierung: local part sollte nicht zu lang sein (max 64 Zeichen)
+        if len(local_part) <= 64 and len(email) < 254:
+            cleaned_emails.append(email)
+
+    contact_info['emails'] = list(set(cleaned_emails))
 
     # Telefonnummer-Extraktion (verschiedene Formate)
     # Deutsche Formate: +49, 0049, (0), mit/ohne Leerzeichen, Bindestriche, Klammern
@@ -2052,11 +2087,12 @@ def walk_and_process():
 
 def cleanup_invalid_phone_numbers():
     """
-    Bereinigt alle vorhandenen JSON-Dateien und entfernt ungültige Telefonnummern.
-    Re-extrahiert Kontaktinformationen aus Quelldateien wenn nötig.
+    Bereinigt alle vorhandenen JSON-Dateien und entfernt ungültige Kontaktinformationen.
+    Re-extrahiert URLs, E-Mails und Telefonnummern aus Quelldateien wenn nötig.
+    Entfernt: URLs mit Satzzeichen, E-Mails mit URL-Präfix, ungültige Telefonnummern.
     """
     print("\n" + "=" * 80)
-    print("BEREINIGUNG: UNGÜLTIGE TELEFONNUMMERN ENTFERNEN")
+    print("BEREINIGUNG: UNGÜLTIGE KONTAKTINFORMATIONEN ENTFERNEN")
     print("=" * 80)
     print(f"Durchsuche: {DST_ROOT}")
     print("=" * 80 + "\n")
