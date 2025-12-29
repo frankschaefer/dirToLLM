@@ -17,7 +17,7 @@ import argparse
 warnings.filterwarnings('ignore', category=UserWarning, module='openpyxl')
 
 # Version und Metadaten
-VERSION = "1.17.1"
+VERSION = "1.17.2"
 VERSION_DATE = "2025-12-28"
 SCRIPT_NAME = "FileInventory - OneDrive Dokumenten-Zusammenfassung (macOS)"
 
@@ -1400,9 +1400,51 @@ def process_file(src_file):
 
     return ocr_info
 
+def validate_phone_number(phone):
+    """
+    Validiert eine Telefonnummer gegen die aktuellen strengen Regex-Pattern.
+    Filtert falsche Positives wie Projektnummern (091-2024) heraus.
+
+    Args:
+        phone: Telefonnummer als String
+
+    Returns:
+        True wenn gültig, False wenn ungültig
+    """
+    import re
+
+    # Normalisiere für Prüfung
+    digits_only = re.sub(r'\D', '', phone)
+
+    # Prüfe Mindestlänge (8 Ziffern)
+    if len(digits_only) < 8:
+        return False
+
+    # Muss mit 0 oder 49 beginnen (deutsche Nummern)
+    if not (digits_only.startswith('0') or digits_only.startswith('49')):
+        return False
+
+    # Prüfe gegen Pattern (mindestens eins muss matchen)
+    phone_patterns = [
+        r'\+49[\s\-]?\(?\d{2,4}\)?[\s\-]?\d{3,10}',
+        r'\+49[\s\-]?\d{2,4}[\s\-/]\d{6,10}',
+        r'0049[\s\-]?\d{2,4}[\s\-]?\d{6,10}',
+        r'\(0\d{2,4}\)[\s\-]?\d{6,10}',
+        r'0\d{2,4}[\s\-/]\d{6,10}',
+        r'0\d{9,11}',
+    ]
+
+    for pattern in phone_patterns:
+        # Nutze search statt fullmatch für flexiblere Matching
+        if re.search(f'^{pattern}$', phone.strip()):
+            return True
+
+    return False
+
 def update_json_with_contact_info(json_path, src_file_path):
     """
     Trägt fehlende Kontaktinformationen (URLs, E-Mails, Telefon) in existierender JSON nach.
+    Validiert auch vorhandene Telefonnummern und entfernt ungültige (z.B. Projektnummern).
     Sehr schnell (nur Regex, kein LLM), spart massive Prozesszeit.
 
     Args:
@@ -1417,16 +1459,27 @@ def update_json_with_contact_info(json_path, src_file_path):
         with open(json_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
 
-        # Prüfe ob Kontaktfelder fehlen oder leer sind
+        # Prüfe ob Kontaktfelder fehlen oder ungültige Telefonnummern enthalten
         entities = data.get('entities', {})
-        needs_update = (
+
+        # Prüfe fehlende Felder
+        needs_extraction = (
             'urls' not in entities or
             'emails' not in entities or
             'phone_numbers' not in entities
         )
 
-        if not needs_update:
-            # Alle Felder vorhanden - nichts zu tun
+        # Prüfe vorhandene Telefonnummern auf Validität
+        needs_phone_validation = False
+        invalid_phones = []
+        if 'phone_numbers' in entities and entities['phone_numbers']:
+            for phone in entities['phone_numbers']:
+                if not validate_phone_number(phone):
+                    invalid_phones.append(phone)
+                    needs_phone_validation = True
+
+        # Wenn nichts zu tun ist, überspringe
+        if not needs_extraction and not needs_phone_validation:
             return False
 
         # Extrahiere Text aus Quelldatei (verwende existierende Funktionen)
@@ -1448,25 +1501,42 @@ def update_json_with_contact_info(json_path, src_file_path):
             # Bilder oder unbekannt - überspringe
             return False
 
-        # Extrahiere Kontaktinformationen
-        contact_info = extract_contact_info_from_text(text)
+        # Extrahiere Kontaktinformationen (wenn nötig)
+        if needs_extraction or needs_phone_validation:
+            contact_info = extract_contact_info_from_text(text)
 
-        # Aktualisiere nur fehlende Felder
-        if 'urls' not in entities:
-            entities['urls'] = contact_info['urls']
-        if 'emails' not in entities:
-            entities['emails'] = contact_info['emails']
-        if 'phone_numbers' not in entities:
-            entities['phone_numbers'] = contact_info['phone_numbers']
+            # Aktualisiere fehlende Felder
+            if 'urls' not in entities:
+                entities['urls'] = contact_info['urls']
+            if 'emails' not in entities:
+                entities['emails'] = contact_info['emails']
 
-        # Speichere aktualisierte JSON
-        with open(json_path, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+            # Telefonnummern: Entweder nachtragen oder neu extrahieren (wenn ungültige gefunden)
+            if 'phone_numbers' not in entities:
+                entities['phone_numbers'] = contact_info['phone_numbers']
+            elif needs_phone_validation:
+                # Entferne ungültige und füge neu extrahierte hinzu
+                valid_existing = [p for p in entities['phone_numbers'] if validate_phone_number(p)]
+                # Kombiniere mit neu extrahierten (ohne Duplikate)
+                all_phones = valid_existing + [p for p in contact_info['phone_numbers'] if p not in valid_existing]
+                entities['phone_numbers'] = all_phones
 
-        print(f"  ⚡ Kontaktinformationen nachgetragen: {len(contact_info['urls'])} URLs, "
-              f"{len(contact_info['emails'])} E-Mails, {len(contact_info['phone_numbers'])} Telefonnummern")
+                if invalid_phones:
+                    print(f"  🧹 Entfernt {len(invalid_phones)} ungültige Telefonnummern: {invalid_phones[:3]}{'...' if len(invalid_phones) > 3 else ''}")
 
-        return True
+            # Speichere aktualisierte JSON
+            with open(json_path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+
+            if needs_extraction:
+                print(f"  ⚡ Kontaktinformationen nachgetragen: {len(contact_info['urls'])} URLs, "
+                      f"{len(contact_info['emails'])} E-Mails, {len(contact_info['phone_numbers'])} Telefonnummern")
+            elif needs_phone_validation:
+                print(f"  ✓ Telefonnummern validiert: {len(entities['phone_numbers'])} gültig, {len(invalid_phones)} entfernt")
+
+            return True
+
+        return False
 
     except Exception as e:
         print(f"Fehler beim Nachtragen der Kontaktinformationen: {e}")
@@ -1980,6 +2050,79 @@ def walk_and_process():
         print(f"ℹ Hinweis: {excluded} Dateien in ausgeschlossenen Verzeichnissen übersprungen")
     print("=" * 70)
 
+def cleanup_invalid_phone_numbers():
+    """
+    Bereinigt alle vorhandenen JSON-Dateien und entfernt ungültige Telefonnummern.
+    Re-extrahiert Kontaktinformationen aus Quelldateien wenn nötig.
+    """
+    print("\n" + "=" * 80)
+    print("BEREINIGUNG: UNGÜLTIGE TELEFONNUMMERN ENTFERNEN")
+    print("=" * 80)
+    print(f"Durchsuche: {DST_ROOT}")
+    print("=" * 80 + "\n")
+
+    # Sammle alle JSON-Dateien
+    all_json_files = []
+    for root, dirs, files in os.walk(DST_ROOT):
+        # Sortiere für konsistente Reihenfolge
+        dirs.sort()
+        files.sort()
+
+        for name in files:
+            if name.endswith('.json'):
+                full_path = os.path.join(root, name)
+                all_json_files.append(full_path)
+
+    total_files = len(all_json_files)
+    print(f"Gefunden: {total_files:,} JSON-Dateien\n")
+
+    if total_files == 0:
+        print("Keine JSON-Dateien gefunden.")
+        return
+
+    # Statistiken
+    files_cleaned = 0
+    total_invalid_removed = 0
+    files_with_invalid = 0
+    start_time = time.time()
+
+    for idx, json_file in enumerate(all_json_files, 1):
+        try:
+            # Bestimme Quelldatei
+            # JSON-Dateien enden mit ".original_extension.json"
+            rel_path = os.path.relpath(json_file, DST_ROOT)
+            src_rel_path = rel_path.replace('.json', '')  # Entferne .json
+            src_file = os.path.join(SRC_ROOT, src_rel_path)
+
+            if not os.path.exists(src_file):
+                continue
+
+            # Rufe update_json_with_contact_info auf (prüft und bereinigt automatisch)
+            was_updated = update_json_with_contact_info(json_file, src_file)
+
+            if was_updated:
+                files_cleaned += 1
+
+            # Fortschritt anzeigen
+            if idx % 100 == 0 or idx == total_files:
+                elapsed = time.time() - start_time
+                progress = (idx / total_files) * 100
+                print(f"\rFortschritt: {idx:,}/{total_files:,} ({progress:.1f}%) - "
+                      f"Bereinigt: {files_cleaned:,} - Zeit: {elapsed:.1f}s", end="", flush=True)
+
+        except Exception as e:
+            print(f"\nFehler bei {json_file}: {e}")
+
+    # Abschlussbericht
+    total_time = time.time() - start_time
+    print(f"\n\n" + "=" * 80)
+    print("BEREINIGUNG ABGESCHLOSSEN")
+    print("=" * 80)
+    print(f"Gescannte Dateien: {total_files:,}")
+    print(f"Bereinigte Dateien: {files_cleaned:,}")
+    print(f"Gesamtzeit: {format_time(total_time)}")
+    print("=" * 80)
+
 def create_combined_database(max_size_mb=30, output_dir=None):
     """
     Erstellt kombinierte JSON-Datenbank-Dateien aus allen einzelnen JSON-Dateien.
@@ -2187,6 +2330,10 @@ Beispiele:
   {sys.argv[0]} --create-database --database-output ~/MyDatabase
     Erstellt Datenbank in benutzerdefiniertem Verzeichnis
 
+  {sys.argv[0]} --cleanup-phones
+    Bereinigt alle JSON-Dateien: Entfernt ungültige Telefonnummern (z.B. Projektnummern)
+    und extrahiert korrekte Telefonnummern neu aus den Quelldateien
+
   {sys.argv[0]} --version
     Zeigt Versionsinformation an
 
@@ -2252,6 +2399,12 @@ Weitere Informationen:
     )
 
     parser.add_argument(
+        '--cleanup-phones',
+        action='store_true',
+        help='Bereinigt alle JSON-Dateien: Entfernt ungültige Telefonnummern und re-extrahiert korrekte aus Quelldateien'
+    )
+
+    parser.add_argument(
         '--max-database-size',
         type=int,
         metavar='MB',
@@ -2282,6 +2435,11 @@ if __name__ == "__main__":
         SUMMARY_MAX_CHARS = args.summary_max_chars
         # Aktualisiere die globale Variable
         globals()['SUMMARY_MAX_CHARS'] = SUMMARY_MAX_CHARS
+
+    # Prüfe ob Telefonnummern-Bereinigung gewünscht ist
+    if args.cleanup_phones:
+        cleanup_invalid_phone_numbers()
+        sys.exit(0)
 
     # Prüfe ob Datenbank-Erstellung gewünscht ist
     if args.create_database:
