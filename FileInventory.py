@@ -17,7 +17,7 @@ import argparse
 warnings.filterwarnings('ignore', category=UserWarning, module='openpyxl')
 
 # Version und Metadaten
-VERSION = "1.16.2"
+VERSION = "1.17.0"
 VERSION_DATE = "2025-12-28"
 SCRIPT_NAME = "FileInventory - OneDrive Dokumenten-Zusammenfassung (macOS)"
 
@@ -439,6 +439,70 @@ def is_duplicate_file(file_path, file_size):
     # Schritt 4: Neuer Hash für diese Größe - speichere
     _SIZE_HASH_CACHE[file_size][file_hash] = file_path
     return False, None
+
+def extract_contact_info_from_text(text):
+    """
+    Extrahiert URLs, E-Mail-Adressen und Telefonnummern aus Text mittels Regex.
+    Sehr schnell (keine LLM-Aufrufe), ideal für inkrementelle Updates.
+
+    Args:
+        text: Der zu durchsuchende Text
+
+    Returns:
+        dict: {'urls': [...], 'emails': [...], 'phone_numbers': [...]}
+    """
+    import re
+
+    contact_info = {
+        'urls': [],
+        'emails': [],
+        'phone_numbers': []
+    }
+
+    if not text:
+        return contact_info
+
+    # URL-Extraktion
+    # Findet http(s)://, www., und gängige Domains
+    url_pattern = r'(?:https?://|www\.)[^\s<>"{}|\\^`\[\]]+'
+    urls = re.findall(url_pattern, text, re.IGNORECASE)
+    contact_info['urls'] = list(set(urls))  # Duplikate entfernen
+
+    # E-Mail-Extraktion
+    # Standard E-Mail-Pattern
+    email_pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
+    emails = re.findall(email_pattern, text)
+    contact_info['emails'] = list(set(emails))
+
+    # Telefonnummer-Extraktion (verschiedene Formate)
+    # Deutsche Formate: +49, 0049, (0), mit/ohne Leerzeichen, Bindestriche, Klammern
+    phone_patterns = [
+        r'\+49[\s\-]?\d{2,4}[\s\-]?\d{3,9}',  # +49 30 12345678
+        r'0049[\s\-]?\d{2,4}[\s\-]?\d{3,9}',  # 0049 30 12345678
+        r'\(0\d{2,4}\)[\s\-]?\d{3,9}',        # (030) 12345678
+        r'0\d{2,4}[\s\-/]\d{3,9}',            # 030/12345678 oder 030-12345678
+        r'\d{3,4}[\s\-]\d{6,8}',              # 030 12345678
+    ]
+
+    phone_numbers = []
+    for pattern in phone_patterns:
+        matches = re.findall(pattern, text)
+        phone_numbers.extend(matches)
+
+    # Bereinige und dedupliziere Telefonnummern
+    cleaned_phones = []
+    for phone in phone_numbers:
+        # Normalisiere: Entferne Leerzeichen für Vergleich
+        normalized = re.sub(r'[\s\-/()]', '', phone)
+        # Mindestlänge 6 Ziffern
+        if len(re.sub(r'\D', '', normalized)) >= 6:
+            # Behalte Originalformat für Lesbarkeit
+            if phone not in cleaned_phones:
+                cleaned_phones.append(phone)
+
+    contact_info['phone_numbers'] = cleaned_phones
+
+    return contact_info
 
 def extract_entities_from_path(file_path):
     """
@@ -1233,12 +1297,20 @@ def process_file(src_file):
     # Speichere Projektnamen separat (neues Feld)
     entities['projects'] = path_entities['projects']
 
+    # Extrahiere Kontaktinformationen (URLs, E-Mails, Telefon) - Regex-basiert, sehr schnell
+    print("Extrahiere Kontaktinformationen...")
+    contact_info = extract_contact_info_from_text(text)
+    entities['urls'] = contact_info['urls']
+    entities['emails'] = contact_info['emails']
+    entities['phone_numbers'] = contact_info['phone_numbers']
+
     # Zeige gefundene Entities (wenn vorhanden)
     entity_count = sum(len(v) for v in entities.values())
     if entity_count > 0:
         print(f"  → Gefunden: {len(entities['companies'])} Firmen, {len(entities['persons'])} Personen, "
               f"{len(entities['institutions'])} Institutionen, {len(entities['organizations'])} Organisationen, "
-              f"{len(entities.get('projects', []))} Projekte")
+              f"{len(entities.get('projects', []))} Projekte, {len(entities.get('urls', []))} URLs, "
+              f"{len(entities.get('emails', []))} E-Mails, {len(entities.get('phone_numbers', []))} Telefonnummern")
 
     # Extrahiere Schlüsselbegriffe aus der Zusammenfassung
     # Die Schlüsselbegriffe sollten am Ende der Zusammenfassung stehen
@@ -1300,7 +1372,10 @@ def process_file(src_file):
             "persons": entities['persons'],
             "institutions": entities['institutions'],
             "organizations": entities['organizations'],
-            "projects": entities.get('projects', [])
+            "projects": entities.get('projects', []),
+            "urls": entities.get('urls', []),
+            "emails": entities.get('emails', []),
+            "phone_numbers": entities.get('phone_numbers', [])
         }
     }
 
@@ -1314,6 +1389,78 @@ def process_file(src_file):
     print(f"Summary erfolgreich erstellt: {dst_file}")
 
     return ocr_info
+
+def update_json_with_contact_info(json_path, src_file_path):
+    """
+    Trägt fehlende Kontaktinformationen (URLs, E-Mails, Telefon) in existierender JSON nach.
+    Sehr schnell (nur Regex, kein LLM), spart massive Prozesszeit.
+
+    Args:
+        json_path: Pfad zur JSON-Datei
+        src_file_path: Pfad zur Quelldatei (zum Text-Extrahieren)
+
+    Returns:
+        True wenn Update durchgeführt wurde, False wenn nicht nötig
+    """
+    try:
+        # Lese JSON
+        with open(json_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+
+        # Prüfe ob Kontaktfelder fehlen oder leer sind
+        entities = data.get('entities', {})
+        needs_update = (
+            'urls' not in entities or
+            'emails' not in entities or
+            'phone_numbers' not in entities
+        )
+
+        if not needs_update:
+            # Alle Felder vorhanden - nichts zu tun
+            return False
+
+        # Extrahiere Text aus Quelldatei (verwende existierende Funktionen)
+        path_obj = pathlib.Path(src_file_path)
+        file_ext = path_obj.suffix.lower()
+
+        # Nutze die bestehenden Extract-Funktionen
+        if file_ext == ".pdf":
+            text, _ = extract_text_pdf(src_file_path)
+        elif file_ext in {".docx", ".doc"}:
+            text = extract_text_docx(src_file_path)
+        elif file_ext in {".pptx", ".ppt"}:
+            text = extract_text_pptx(src_file_path)
+        elif file_ext in {".xlsx", ".xls", ".xlsm", ".xltx"}:
+            text = extract_text_xlsx(src_file_path)
+        elif file_ext in {".txt", ".md"}:
+            text = extract_text_txt(src_file_path)
+        else:
+            # Bilder oder unbekannt - überspringe
+            return False
+
+        # Extrahiere Kontaktinformationen
+        contact_info = extract_contact_info_from_text(text)
+
+        # Aktualisiere nur fehlende Felder
+        if 'urls' not in entities:
+            entities['urls'] = contact_info['urls']
+        if 'emails' not in entities:
+            entities['emails'] = contact_info['emails']
+        if 'phone_numbers' not in entities:
+            entities['phone_numbers'] = contact_info['phone_numbers']
+
+        # Speichere aktualisierte JSON
+        with open(json_path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+
+        print(f"  ⚡ Kontaktinformationen nachgetragen: {len(contact_info['urls'])} URLs, "
+              f"{len(contact_info['emails'])} E-Mails, {len(contact_info['phone_numbers'])} Telefonnummern")
+
+        return True
+
+    except Exception as e:
+        print(f"Fehler beim Nachtragen der Kontaktinformationen: {e}")
+        return False
 
 def validate_json_file(json_path, src_file_path=None):
     """
@@ -1741,7 +1888,13 @@ def walk_and_process():
             ocr_info = None
             if os.path.exists(dst_file):
                 if validate_json_file(dst_file, full_path):
-                    skipped += 1
+                    # JSON ist valide - prüfe ob Kontaktinformationen nachgetragen werden müssen
+                    updated = update_json_with_contact_info(dst_file, full_path)
+                    if not updated:
+                        skipped += 1
+                    else:
+                        skipped += 1  # Zählt trotzdem als übersprungen (nur Mini-Update)
+
                     # Lese OCR-Info aus existierender JSON-Datei für Statistik
                     try:
                         with open(dst_file, 'r', encoding='utf-8') as f:
