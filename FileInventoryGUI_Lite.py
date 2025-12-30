@@ -19,7 +19,7 @@ from pathlib import Path
 # Importiere FileInventory-Funktionen
 from FileInventory import (
     VERSION, VERSION_DATE, SRC_ROOT, DST_ROOT,
-    EXTENSIONS, EXCLUDE_PATTERNS
+    EXTENSIONS, EXCLUDE_PATTERNS, process_file
 )
 
 
@@ -58,6 +58,10 @@ class FileInventoryAppLite(tk.Tk):
             'skipped': 0,
             'errors': 0
         }
+
+        # Zeit-Tracking
+        self.start_time = None
+        self.last_file_time = None
 
         # UI erstellen
         self._create_ui()
@@ -282,9 +286,15 @@ class FileInventoryAppLite(tk.Tk):
             command=self._show_help
         ).pack(side="left")
 
-        # Statistik
-        self.stats_label = ttk.Label(footer_frame, text="Bereit")
-        self.stats_label.grid(row=0, column=1, sticky="e")
+        # Statistik und Zeit
+        stats_container = ttk.Frame(footer_frame)
+        stats_container.grid(row=0, column=1, sticky="e")
+
+        self.stats_label = ttk.Label(stats_container, text="Bereit")
+        self.stats_label.pack(side="top", anchor="e")
+
+        self.time_label = ttk.Label(stats_container, text="", foreground="gray")
+        self.time_label.pack(side="top", anchor="e")
 
         # Progress Bar
         self.progress_var = tk.DoubleVar()
@@ -327,8 +337,49 @@ class FileInventoryAppLite(tk.Tk):
         self.stats_label.config(text=stats_text)
 
         if self.stats['total_files'] > 0:
-            progress = (self.stats['processed'] / self.stats['total_files']) * 100
+            progress = ((self.stats['processed'] + self.stats['skipped']) / self.stats['total_files']) * 100
             self.progress_var.set(progress)
+
+            # Berechne Restzeit
+            if self.start_time and (self.stats['processed'] + self.stats['skipped']) > 0:
+                import time
+                elapsed = time.time() - self.start_time
+                completed = self.stats['processed'] + self.stats['skipped']
+                remaining = self.stats['total_files'] - completed
+
+                if remaining > 0:
+                    avg_time = elapsed / completed
+                    eta_seconds = avg_time * remaining
+
+                    # Formatiere Zeit
+                    if eta_seconds < 60:
+                        eta_str = f"{int(eta_seconds)}s"
+                    elif eta_seconds < 3600:
+                        minutes = int(eta_seconds / 60)
+                        seconds = int(eta_seconds % 60)
+                        eta_str = f"{minutes}m {seconds}s"
+                    else:
+                        hours = int(eta_seconds / 3600)
+                        minutes = int((eta_seconds % 3600) / 60)
+                        eta_str = f"{hours}h {minutes}m"
+
+                    # Formatiere vergangene Zeit
+                    if elapsed < 60:
+                        elapsed_str = f"{int(elapsed)}s"
+                    elif elapsed < 3600:
+                        minutes = int(elapsed / 60)
+                        seconds = int(elapsed % 60)
+                        elapsed_str = f"{minutes}m {seconds}s"
+                    else:
+                        hours = int(elapsed / 3600)
+                        minutes = int((elapsed % 3600) / 60)
+                        elapsed_str = f"{hours}h {minutes}m"
+
+                    self.time_label.config(text=f"Vergangen: {elapsed_str} | Verbleibend: ~{eta_str}")
+                else:
+                    self.time_label.config(text=f"Abgeschlossen")
+            else:
+                self.time_label.config(text="")
 
     def _start_processing(self):
         """Startet die Verarbeitung"""
@@ -346,6 +397,11 @@ class FileInventoryAppLite(tk.Tk):
 
         self.stats = {'total_files': 0, 'processed': 0, 'skipped': 0, 'errors': 0}
 
+        # Setze Start-Zeit
+        import time
+        self.start_time = time.time()
+        self.time_label.config(text="Initialisiere...")
+
         self._log("=== Verarbeitung gestartet ===")
         self._log(f"Quelle: {src}")
         self._log(f"Ziel: {dst}")
@@ -362,7 +418,29 @@ class FileInventoryAppLite(tk.Tk):
     def _processing_worker(self):
         """Worker-Thread"""
         try:
+            import FileInventory
+            import io
+            import contextlib
+
+            # Setze Pfade in FileInventory-Modul
             src = self.src_path.get()
+            dst = self.dst_path.get()
+            FileInventory.SRC_ROOT = src
+            FileInventory.DST_ROOT = dst
+
+            # Setze Parameter
+            FileInventory.SUMMARY_MAX_CHARS = self.summary_max_chars.get()
+            FileInventory.MIN_IMAGE_SIZE = self.min_image_size.get() * 1024  # KB -> Bytes
+
+            # Erstelle stdout-Capture für print-Ausgaben
+            output_capture = io.StringIO()
+
+            # Log Konfiguration
+            self.message_queue.put(("log", f"Konfiguration:"))
+            self.message_queue.put(("log", f"  DSGVO: {self.update_dsgvo.get()}"))
+            self.message_queue.put(("log", f"  Existierende überspringen: {self.skip_existing.get()}"))
+            self.message_queue.put(("log", f"  Max. Zusammenfassung: {FileInventory.SUMMARY_MAX_CHARS} Zeichen"))
+            self.message_queue.put(("log", f"  Min. Bildgröße: {self.min_image_size.get()} KB"))
 
             # Sammle Dateien
             self.message_queue.put(("log", "Sammle Dateien..."))
@@ -386,19 +464,55 @@ class FileInventoryAppLite(tk.Tk):
             self.message_queue.put(("stats", None))
             self.message_queue.put(("log", f"Gefunden: {len(all_files)} Dateien"))
 
-            # Hinweis: Vollständige Integration folgt
-            self.message_queue.put(("log", "Demo-Modus: Keine echte Verarbeitung"))
-
-            for idx, file_path in enumerate(all_files[:10], 1):  # Demo: nur 10 Dateien
+            # Verarbeite alle Dateien
+            for idx, file_path in enumerate(all_files, 1):
                 if not self.processing:
+                    self.message_queue.put(("log", "Verarbeitung abgebrochen"))
                     break
-                self.message_queue.put(("log", f"[{idx}/10] {os.path.basename(file_path)}"))
-                self.stats['processed'] += 1
-                self.message_queue.put(("stats", None))
-                import time
-                time.sleep(0.1)
+
+                try:
+                    self.message_queue.put(("log", f"[{idx}/{len(all_files)}] {os.path.basename(file_path)}"))
+
+                    # Prüfe skip_existing
+                    skip_existing = self.skip_existing.get()
+                    if not skip_existing:
+                        # Lösche vorhandene JSON falls vorhanden
+                        rel_path = os.path.relpath(file_path, src)
+                        dst_dir = os.path.join(dst, os.path.dirname(rel_path))
+                        dst_file = os.path.join(dst_dir, os.path.basename(file_path) + ".json")
+                        if os.path.exists(dst_file):
+                            os.remove(dst_file)
+                            self.message_queue.put(("log", f"  Lösche existierende JSON"))
+
+                    # Capture stdout für print-Ausgaben
+                    with contextlib.redirect_stdout(output_capture):
+                        # Rufe FileInventory process_file auf
+                        result = process_file(file_path)
+
+                    # Hole print-Ausgaben und zeige sie in GUI
+                    captured = output_capture.getvalue()
+                    if captured:
+                        for line in captured.strip().split('\n'):
+                            if line:
+                                self.message_queue.put(("log", f"  {line}"))
+                        output_capture.truncate(0)
+                        output_capture.seek(0)
+
+                    if result is None:
+                        # Datei wurde übersprungen oder hatte Fehler
+                        self.stats['skipped'] += 1
+                    else:
+                        self.stats['processed'] += 1
+
+                    self.message_queue.put(("stats", None))
+
+                except Exception as e:
+                    self.message_queue.put(("log", f"  ⚠️ Fehler: {str(e)}"))
+                    self.stats['errors'] += 1
+                    self.message_queue.put(("stats", None))
 
             self.message_queue.put(("log", "=== Verarbeitung abgeschlossen ==="))
+            self.message_queue.put(("log", f"✓ Verarbeitet: {self.stats['processed']}, Übersprungen: {self.stats['skipped']}, Fehler: {self.stats['errors']}"))
 
         except Exception as e:
             self.message_queue.put(("log", f"Fehler: {str(e)}"))
@@ -429,6 +543,25 @@ class FileInventoryAppLite(tk.Tk):
         self.start_button.config(state="normal")
         self.stop_button.config(state="disabled")
         self.progress_var.set(100)
+
+        # Zeige Gesamt-Zeit
+        if self.start_time:
+            import time
+            total_elapsed = time.time() - self.start_time
+
+            if total_elapsed < 60:
+                elapsed_str = f"{int(total_elapsed)}s"
+            elif total_elapsed < 3600:
+                minutes = int(total_elapsed / 60)
+                seconds = int(total_elapsed % 60)
+                elapsed_str = f"{minutes}m {seconds}s"
+            else:
+                hours = int(total_elapsed / 3600)
+                minutes = int((total_elapsed % 3600) / 60)
+                elapsed_str = f"{hours}h {minutes}m"
+
+            self.time_label.config(text=f"Abgeschlossen in {elapsed_str}")
+            self.start_time = None
 
     def _show_advanced_settings(self):
         """Zeigt erweiterte Einstellungen in einem Dialog"""
