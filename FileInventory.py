@@ -83,8 +83,9 @@ _SIZE_HASH_CACHE = {}  # {size: {hash: path}}
 SENSITIVE_DATA_KEYWORDS = {
     # § 26 BDSG - Beschäftigtendaten
     "GEHALTSABRECHNUNG": {
-        "keywords": ["lohnabrechnung", "gehaltsabrechnung", "entgeltabrechnung", "gehalt",
-                    "brutto", "netto", "lohnsteuer", "sozialversicherung", "entgelt",
+        "keywords": ["lohnabrechnung", "gehaltsabrechnung", "entgeltabrechnung",
+                    "bruttolohn", "nettolohn", "bruttogehalt", "nettogehalt",
+                    "lohnsteuer", "sozialversicherung", "entgelt",
                     "verdienst", "lohnzettel", "gehaltsmitteilung"],
         "dsgvo_kategorie": "Art. 9 Abs. 2 lit. b DSGVO i.V.m. § 26 BDSG - Beschäftigtendaten",
         "schutzklasse": "hoch"
@@ -146,13 +147,11 @@ SENSITIVE_DATA_KEYWORDS = {
         "schutzklasse": "sehr hoch"
     },
 
-    # Bankdaten
-    "BANKDATEN": {
-        "keywords": ["iban", "bankverbindung", "kontonummer", "bankdaten", "bic",
-                    "kontof\u00fchrung", "kreditinstitut", "geldinstitut"],
-        "dsgvo_kategorie": "Art. 6 Abs. 1 DSGVO - Finanzdaten",
-        "schutzklasse": "hoch"
-    }
+
+    # BANKDATEN wurde ENTFERNT - Begründung:
+    # - Firmen-IBANs sind NICHT personenbezogen (Art. 4 Nr. 1 DSGVO)
+    # - Nur Private Bankverbindungen natürlicher Personen sind schützenswert
+    # - Wird nun via LLM-Kontext-Check geprüft (siehe classify_sensitive_data)
 }
 
 # Prüfe OCR-Verfügbarkeit global (einmalig beim Start)
@@ -696,6 +695,148 @@ def extract_entities_from_path(file_path):
 
     return entities
 
+def check_bankdata_context_with_llm(text):
+    """
+    Prüft via LLM, ob Bankdaten (IBAN/Kontonummern) im Kontext natürlicher oder juristischer Personen stehen.
+
+    Rechtlicher Hintergrund:
+    - Firmen-IBANs (GmbH, AG, etc.) sind NICHT personenbezogen (Art. 4 Nr. 1 DSGVO)
+    - Private IBANs natürlicher Personen (Einzelunternehmer, Freiberufler) sind personenbezogen
+
+    Args:
+        text: Der zu analysierende Text (sollte bereits IBAN/Kontonummer enthalten)
+
+    Returns:
+        dict: {
+            'contains_private_bankdata': bool,  # True wenn natürliche Person
+            'confidence': str,  # 'hoch', 'mittel', 'niedrig'
+            'context': str  # Kurze Erklärung
+        }
+    """
+    import re
+
+    # Prüfe ob überhaupt Bankdaten enthalten sind
+    bankdata_pattern = r'\b(iban|kontonummer|bankverbindung|bic)\b'
+    if not re.search(bankdata_pattern, text.lower()):
+        return {
+            'contains_private_bankdata': False,
+            'confidence': 'hoch',
+            'context': 'Keine Bankdaten gefunden'
+        }
+
+    # Begrenze Text auf relevante Länge
+    max_chars = 3000
+    if len(text) > max_chars:
+        # Nehme ersten Teil (wo meist Absender/Kontext steht)
+        analysis_text = text[:max_chars]
+    else:
+        analysis_text = text
+
+    prompt = """Analysiere den folgenden Text auf Bankverbindungen (IBAN, Kontonummern).
+
+AUFGABE:
+Bestimme, ob die Bankdaten zu NATÜRLICHEN PERSONEN oder JURISTISCHEN PERSONEN gehören.
+
+RECHTLICHER HINTERGRUND:
+- Firmen-IBANs (GmbH, AG, UG, KG, OHG, etc.) sind NICHT personenbezogen
+- Private IBANs von Einzelpersonen, Einzelunternehmer, Freiberufler SIND personenbezogen
+- Geschäftsbriefe mit Firmen-IBAN sind normal und nicht besonders schützenswert
+
+INDIKATOREN FÜR FIRMEN (→ NICHT schützenswert):
+- Rechtsformen: GmbH, AG, UG, KG, OHG, e.V., Stiftung
+- Kontext: Geschäftsbrief, Angebot, Rechnung an Firma
+- Briefkopf mit Firmennamen und Registernummer
+- "Geschäftsführer:", "Vorstand:", "Handelsregister:"
+
+INDIKATOREN FÜR NATÜRLICHE PERSONEN (→ schützenswert):
+- Einzelperson ohne Rechtsform
+- Freiberufler, Selbständige (ohne GmbH/UG)
+- Private Bankverbindung im Arbeitsvertrag
+- Gehaltsabrechnung, Lohnzettel
+- Bewerbungsunterlagen
+
+AUSGABEFORMAT (exakt so):
+TYP: [FIRMA / NATÜRLICHE_PERSON / UNKLAR]
+KONFIDENZ: [HOCH / MITTEL / NIEDRIG]
+KONTEXT: [Ein Satz Begründung]
+
+Beispiele:
+- Geschäftsbrief mit "Müller GmbH, IBAN DE..." → TYP: FIRMA
+- Gehaltsabrechnung mit IBAN → TYP: NATÜRLICHE_PERSON
+- Rechnung von "Max Mustermann Steuerberater, IBAN..." → TYP: NATÜRLICHE_PERSON
+"""
+
+    try:
+        payload = {
+            "model": MODEL_NAME,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "Du bist ein DSGVO-Klassifizierungs-Experte. Analysiere sachlich und präzise."
+                },
+                {
+                    "role": "user",
+                    "content": f"{prompt}\n\nTEXT:\n{analysis_text}"
+                }
+            ],
+            "temperature": 0.1,
+            "max_tokens": 200
+        }
+
+        response = requests.post(
+            LMSTUDIO_API_URL,
+            headers={"Content-Type": "application/json"},
+            json=payload,
+            timeout=30
+        )
+
+        if response.status_code == 200:
+            result_text = response.json()['choices'][0]['message']['content'].strip()
+
+            # Parse Antwort
+            is_private = False
+            confidence = 'niedrig'
+            context = result_text
+
+            if 'TYP:' in result_text:
+                if 'NATÜRLICHE_PERSON' in result_text or 'NATÜRLICHE PERSON' in result_text:
+                    is_private = True
+                elif 'FIRMA' in result_text:
+                    is_private = False
+
+            if 'KONFIDENZ:' in result_text:
+                if 'HOCH' in result_text:
+                    confidence = 'hoch'
+                elif 'MITTEL' in result_text:
+                    confidence = 'mittel'
+
+            # Extrahiere Kontext-Zeile
+            for line in result_text.split('\n'):
+                if line.startswith('KONTEXT:'):
+                    context = line.replace('KONTEXT:', '').strip()
+                    break
+
+            return {
+                'contains_private_bankdata': is_private,
+                'confidence': confidence,
+                'context': context
+            }
+        else:
+            # Fallback bei LLM-Fehler: Im Zweifel als schützenswert markieren
+            return {
+                'contains_private_bankdata': True,
+                'confidence': 'niedrig',
+                'context': 'LLM-Analyse fehlgeschlagen - im Zweifel als schützenswert markiert'
+            }
+
+    except Exception as e:
+        # Fallback: Im Zweifel als schützenswert markieren
+        return {
+            'contains_private_bankdata': True,
+            'confidence': 'niedrig',
+            'context': f'Fehler bei LLM-Analyse: {str(e)[:100]}'
+        }
+
 def classify_sensitive_data(text, file_path=None):
     """
     Klassifiziert Dokumente hinsichtlich besonders schutzbedürftiger personenbezogener Daten
@@ -766,6 +907,34 @@ def classify_sensitive_data(text, file_path=None):
                 highest_protection = current_level
 
     result['protection_level'] = highest_protection
+
+    # ZUSÄTZLICHE PRÜFUNG: Bankdaten mit LLM-Kontext-Analyse
+    # Prüfe ob Dokument IBAN/Kontonummer enthält
+    bankdata_pattern = r'\b(iban|kontonummer|bankverbindung|bic)\b'
+    if re.search(bankdata_pattern, search_text, re.IGNORECASE):
+        # Führe LLM-basierte Kontext-Analyse durch
+        bankdata_check = check_bankdata_context_with_llm(text)
+
+        # Nur wenn es sich um PRIVATE Bankdaten handelt, als sensibel markieren
+        if bankdata_check['contains_private_bankdata']:
+            result['contains_sensitive_data'] = True
+            if 'BANKDATEN_PRIVAT' not in result['data_categories']:
+                result['data_categories'].append('BANKDATEN_PRIVAT')
+
+            # Füge DSGVO-Klassifizierung hinzu
+            dsgvo_cat = "Art. 6 Abs. 1 DSGVO - Finanzdaten (natürliche Person)"
+            if dsgvo_cat not in result['dsgvo_classification']:
+                result['dsgvo_classification'].append(dsgvo_cat)
+
+            # Setze Schutzklasse auf 'hoch'
+            if highest_protection is None or protection_levels.get('hoch', 0) > protection_levels.get(highest_protection, 0):
+                highest_protection = 'hoch'
+                result['protection_level'] = highest_protection
+
+            # Füge Details zur Begründung hinzu
+            result['matched_keywords']['BANKDATEN_PRIVAT'] = [
+                f"LLM-Analyse: {bankdata_check['context']} (Konfidenz: {bankdata_check['confidence']})"
+            ]
 
     return result
 
