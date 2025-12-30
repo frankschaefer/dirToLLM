@@ -145,30 +145,77 @@ class FileInventoryAppLite(tk.Tk):
 
     def _create_options_section(self, parent):
         """Erstellt den Optionen-Bereich"""
-        options_frame = ttk.LabelFrame(parent, text="Optionen", padding="10")
+        options_frame = ttk.LabelFrame(parent, text="Optionen & Parameter", padding="10")
         options_frame.grid(row=2, column=0, sticky="ew", pady=(0, 10))
+        options_frame.grid_columnconfigure(1, weight=1)
+
+        # Checkboxen
+        cb_frame = ttk.Frame(options_frame)
+        cb_frame.grid(row=0, column=0, columnspan=3, sticky="ew", pady=(0, 10))
 
         self.update_dsgvo = tk.BooleanVar(value=True)
         self.skip_existing = tk.BooleanVar(value=True)
         self.create_database = tk.BooleanVar(value=False)
 
         ttk.Checkbutton(
-            options_frame,
-            text="DSGVO-Klassifizierung durchführen",
+            cb_frame,
+            text="DSGVO-Klassifizierung",
             variable=self.update_dsgvo
         ).grid(row=0, column=0, sticky="w", padx=10)
 
         ttk.Checkbutton(
-            options_frame,
-            text="Existierende Dateien überspringen",
+            cb_frame,
+            text="Existierende überspringen",
             variable=self.skip_existing
         ).grid(row=0, column=1, sticky="w", padx=10)
 
         ttk.Checkbutton(
-            options_frame,
-            text="Kombinierte Datenbank erstellen",
+            cb_frame,
+            text="Datenbank erstellen",
             variable=self.create_database
         ).grid(row=0, column=2, sticky="w", padx=10)
+
+        # Parameter
+        ttk.Separator(options_frame, orient='horizontal').grid(
+            row=1, column=0, columnspan=3, sticky="ew", pady=10
+        )
+
+        # Zusammenfassungs-Länge
+        ttk.Label(options_frame, text="Max. Zusammenfassung (Zeichen):").grid(
+            row=2, column=0, sticky="w", padx=10, pady=5
+        )
+        self.summary_max_chars = tk.IntVar(value=1500)
+        summary_spin = ttk.Spinbox(
+            options_frame,
+            from_=500,
+            to=5000,
+            increment=100,
+            textvariable=self.summary_max_chars,
+            width=10
+        )
+        summary_spin.grid(row=2, column=1, sticky="w", padx=10, pady=5)
+
+        # Min. Bildgröße
+        ttk.Label(options_frame, text="Min. Bildgröße (KB):").grid(
+            row=3, column=0, sticky="w", padx=10, pady=5
+        )
+        self.min_image_size = tk.IntVar(value=10)
+        image_spin = ttk.Spinbox(
+            options_frame,
+            from_=1,
+            to=1024,
+            increment=10,
+            textvariable=self.min_image_size,
+            width=10
+        )
+        image_spin.grid(row=3, column=1, sticky="w", padx=10, pady=5)
+
+        # Erweiterte Optionen (Button)
+        ttk.Button(
+            options_frame,
+            text="⚙ Erweiterte Einstellungen...",
+            command=self._show_advanced_settings
+        ).grid(row=2, column=2, rowspan=2, padx=10, pady=5)
 
     def _create_log_section(self, parent):
         """Erstellt den Log-Bereich"""
@@ -226,7 +273,14 @@ class FileInventoryAppLite(tk.Tk):
             command=self._stop_processing,
             state="disabled"
         )
-        self.stop_button.pack(side="left")
+        self.stop_button.pack(side="left", padx=(0, 10))
+
+        # Hilfe-Button
+        ttk.Button(
+            button_frame,
+            text="❓ Hilfe",
+            command=self._show_help
+        ).pack(side="left")
 
         # Statistik
         self.stats_label = ttk.Label(footer_frame, text="Bereit")
@@ -375,6 +429,462 @@ class FileInventoryAppLite(tk.Tk):
         self.start_button.config(state="normal")
         self.stop_button.config(state="disabled")
         self.progress_var.set(100)
+
+    def _show_advanced_settings(self):
+        """Zeigt erweiterte Einstellungen in einem Dialog"""
+        dialog = tk.Toplevel(self)
+        dialog.title("Erweiterte Einstellungen")
+        dialog.geometry("600x500")
+        dialog.transient(self)
+        dialog.grab_set()
+
+        # Hauptframe mit Scrollbar
+        main_frame = ttk.Frame(dialog, padding="20")
+        main_frame.pack(fill="both", expand=True)
+
+        # Titel
+        ttk.Label(
+            main_frame,
+            text="⚙ Erweiterte Einstellungen",
+            font=('Helvetica', 16, 'bold')
+        ).pack(pady=(0, 20))
+
+        # Notebook für Tabs
+        notebook = ttk.Notebook(main_frame)
+        notebook.pack(fill="both", expand=True)
+
+        # Tab 1: Dateitypen
+        files_tab = ttk.Frame(notebook, padding="10")
+        notebook.add(files_tab, text="Dateitypen")
+
+        ttk.Label(
+            files_tab,
+            text="Zu verarbeitende Dateitypen:",
+            font=('Helvetica', 12, 'bold')
+        ).pack(anchor="w", pady=(0, 10))
+
+        extensions_text = ", ".join(sorted(EXTENSIONS))
+        ttk.Label(
+            files_tab,
+            text=extensions_text,
+            wraplength=500,
+            justify="left"
+        ).pack(anchor="w")
+
+        ttk.Label(
+            files_tab,
+            text="\n💡 Tipp: Dateitypen können in FileInventory.py angepasst werden",
+            foreground="gray"
+        ).pack(anchor="w")
+
+        # Tab 2: Ausschlüsse
+        exclude_tab = ttk.Frame(notebook, padding="10")
+        notebook.add(exclude_tab, text="Ausschlüsse")
+
+        ttk.Label(
+            exclude_tab,
+            text="Ausgeschlossene Verzeichnisse:",
+            font=('Helvetica', 12, 'bold')
+        ).pack(anchor="w", pady=(0, 10))
+
+        exclude_text = tk.Text(exclude_tab, height=15, wrap="word")
+        exclude_text.pack(fill="both", expand=True)
+        exclude_text.insert("1.0", "\n".join(EXCLUDE_PATTERNS))
+        exclude_text.config(state="disabled")
+
+        # Tab 3: LLM-Einstellungen
+        llm_tab = ttk.Frame(notebook, padding="10")
+        notebook.add(llm_tab, text="LLM")
+
+        ttk.Label(
+            llm_tab,
+            text="LM Studio Konfiguration:",
+            font=('Helvetica', 12, 'bold')
+        ).pack(anchor="w", pady=(0, 10))
+
+        # API URL
+        ttk.Label(llm_tab, text="API URL:").pack(anchor="w")
+        api_url = ttk.Entry(llm_tab, width=50)
+        api_url.insert(0, "http://localhost:1234/v1/chat/completions")
+        api_url.pack(fill="x", pady=(0, 10))
+
+        # Model Name
+        ttk.Label(llm_tab, text="Model Name:").pack(anchor="w")
+        model_name = ttk.Entry(llm_tab, width=50)
+        model_name.insert(0, "local-model")
+        model_name.pack(fill="x", pady=(0, 10))
+
+        # Max Context Tokens
+        ttk.Label(llm_tab, text="Max Context Tokens:").pack(anchor="w")
+        max_tokens = ttk.Spinbox(llm_tab, from_=8192, to=524288, increment=8192, width=20)
+        max_tokens.set(262144)
+        max_tokens.pack(anchor="w", pady=(0, 10))
+
+        # Tab 4: Performance
+        perf_tab = ttk.Frame(notebook, padding="10")
+        notebook.add(perf_tab, text="Performance")
+
+        ttk.Label(
+            perf_tab,
+            text="Performance-Einstellungen:",
+            font=('Helvetica', 12, 'bold')
+        ).pack(anchor="w", pady=(0, 10))
+
+        # Parallele Verarbeitung (zukünftig)
+        parallel_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            perf_tab,
+            text="Parallele Verarbeitung (experimentell)",
+            variable=parallel_var,
+            state="disabled"
+        ).pack(anchor="w")
+
+        ttk.Label(
+            perf_tab,
+            text="⚠️ Noch nicht implementiert",
+            foreground="orange"
+        ).pack(anchor="w", padx=20)
+
+        # Buttons
+        button_frame = ttk.Frame(main_frame)
+        button_frame.pack(fill="x", pady=(20, 0))
+
+        ttk.Button(
+            button_frame,
+            text="Schließen",
+            command=dialog.destroy
+        ).pack(side="right", padx=5)
+
+        ttk.Button(
+            button_frame,
+            text="Standard wiederherstellen",
+            command=lambda: messagebox.showinfo(
+                "Info",
+                "Diese Funktion ist noch nicht implementiert.\n"
+                "Starte die App neu für Standard-Einstellungen."
+            )
+        ).pack(side="right", padx=5)
+
+    def _show_help(self):
+        """Zeigt die Hilfe-Seite mit README"""
+        help_window = tk.Toplevel(self)
+        help_window.title("FileInventory - Hilfe")
+        help_window.geometry("900x700")
+        help_window.transient(self)
+
+        # Hauptframe
+        main_frame = ttk.Frame(help_window, padding="10")
+        main_frame.pack(fill="both", expand=True)
+
+        # Titel
+        title_frame = ttk.Frame(main_frame)
+        title_frame.pack(fill="x", pady=(0, 10))
+
+        ttk.Label(
+            title_frame,
+            text="❓ FileInventory - Hilfe & Dokumentation",
+            font=('Helvetica', 18, 'bold')
+        ).pack(side="left")
+
+        ttk.Button(
+            title_frame,
+            text="✕ Schließen",
+            command=help_window.destroy
+        ).pack(side="right")
+
+        # Notebook für Tabs
+        notebook = ttk.Notebook(main_frame)
+        notebook.pack(fill="both", expand=True, pady=(0, 10))
+
+        # Tab 1: Schnellstart
+        quickstart_tab = ttk.Frame(notebook, padding="10")
+        notebook.add(quickstart_tab, text="Schnellstart")
+
+        quickstart_text = tk.Text(quickstart_tab, wrap="word", font=('Helvetica', 11))
+        quickstart_scroll = ttk.Scrollbar(quickstart_tab, command=quickstart_text.yview)
+        quickstart_text.configure(yscrollcommand=quickstart_scroll.set)
+
+        quickstart_content = """
+🚀 SCHNELLSTART
+
+1. QUELLVERZEICHNIS AUSWÄHLEN
+   • Klicke auf "Durchsuchen" beim Quellverzeichnis
+   • Wähle den Ordner mit deinen Dokumenten (z.B. OneDrive)
+   • Standard: ~/OneDrive - Marc König Unternehmensberatung
+
+2. AUSGABEVERZEICHNIS FESTLEGEN
+   • Klicke auf "Durchsuchen" beim Ausgabeverzeichnis
+   • Wähle wo die JSON-Dateien gespeichert werden sollen
+   • Standard: ~/LLM
+
+3. OPTIONEN KONFIGURIEREN
+   ☑ DSGVO-Klassifizierung durchführen
+      → Analysiert Dokumente auf personenbezogene Daten
+      → Warnt vor sensiblen Daten (Gehaltsabrechnungen, etc.)
+
+   ☑ Existierende Dateien überspringen
+      → Spart Zeit bei erneutem Durchlauf
+      → Nur neue/geänderte Dateien werden verarbeitet
+
+   ☐ Kombinierte Datenbank erstellen
+      → Erstellt große JSON-Datenbanken für RAG-Systeme
+      → Optimal für semantische Suche
+
+4. PARAMETER ANPASSEN (OPTIONAL)
+   • Max. Zusammenfassung: 500-5000 Zeichen
+   • Min. Bildgröße: 1-1024 KB
+   • ⚙ Erweiterte Einstellungen für mehr Optionen
+
+5. VERARBEITUNG STARTEN
+   • Klicke auf "▶ Verarbeitung starten"
+   • Beobachte den Fortschritt im Log-Bereich
+   • Stoppe bei Bedarf mit "■ Stoppen"
+
+6. ERGEBNISSE NUTZEN
+   • JSON-Dateien im Ausgabeverzeichnis
+   • Eine .json pro Quelldatei
+   • Enthält: Zusammenfassung, Entities, Keywords, DSGVO-Klassifizierung
+"""
+
+        quickstart_text.insert("1.0", quickstart_content)
+        quickstart_text.config(state="disabled")
+        quickstart_text.pack(side="left", fill="both", expand=True)
+        quickstart_scroll.pack(side="right", fill="y")
+
+        # Tab 2: Features
+        features_tab = ttk.Frame(notebook, padding="10")
+        notebook.add(features_tab, text="Features")
+
+        features_text = tk.Text(features_tab, wrap="word", font=('Helvetica', 11))
+        features_scroll = ttk.Scrollbar(features_tab, command=features_text.yview)
+        features_text.configure(yscrollcommand=features_scroll.set)
+
+        features_content = """
+✨ FEATURES
+
+📄 UNTERSTÜTZTE DATEITYPEN
+   • PDF-Dokumente (.pdf)
+   • Word-Dokumente (.docx, .doc)
+   • PowerPoint-Präsentationen (.pptx, .ppt)
+   • Excel-Tabellen (.xlsx, .xls, .xlsm, .xltx)
+   • Textdateien (.txt, .md)
+   • Bilder (.png, .jpg, .jpeg)
+
+🤖 KI-GESTÜTZTE ANALYSE
+   • Automatische Zusammenfassungen via LLM
+   • Named Entity Recognition (Firmen, Personen, Institutionen)
+   • Keyword-Extraktion
+   • Semantisch optimiert für RAG-Systeme
+
+🔐 DSGVO-KLASSIFIZIERUNG
+   • Erkennt personenbezogene Daten
+   • Unterscheidet Firmen- vs. Private Bankdaten
+   • Warnt vor sensiblen Kategorien:
+     - Gehaltsabrechnungen
+     - Gesundheitsdaten
+     - Personalakten
+     - Sozialversicherungsdaten
+   • Rechtliche Einordnung nach Art. 9 DSGVO
+
+📊 DATENEXTRAKTION
+   • Text aus PDFs (auch gescannte mit OCR)
+   • Metadaten (Autor, Datum, etc.)
+   • URLs und E-Mail-Adressen
+   • Telefonnummern
+   • Projekte und Organisationen
+
+🚀 PERFORMANCE
+   • Intelligentes Caching
+   • Duplikat-Erkennung
+   • Multi-Threading (GUI bleibt responsive)
+   • Fortschrittsanzeige in Echtzeit
+
+💾 OUTPUT
+   • JSON-Format pro Datei
+   • RAG-optimierte Zusammenfassungen
+   • Strukturierte Metadaten
+   • Optional: Kombinierte Datenbanken
+"""
+
+        features_text.insert("1.0", features_content)
+        features_text.config(state="disabled")
+        features_text.pack(side="left", fill="both", expand=True)
+        features_scroll.pack(side="right", fill="y")
+
+        # Tab 3: FAQ
+        faq_tab = ttk.Frame(notebook, padding="10")
+        notebook.add(faq_tab, text="FAQ")
+
+        faq_text = tk.Text(faq_tab, wrap="word", font=('Helvetica', 11))
+        faq_scroll = ttk.Scrollbar(faq_tab, command=faq_text.yview)
+        faq_text.configure(yscrollcommand=faq_scroll.set)
+
+        faq_content = """
+❓ HÄUFIG GESTELLTE FRAGEN
+
+F: Wie lange dauert die Verarbeitung?
+A: Abhängig von Dateigröße und Anzahl. Typisch:
+   • 100 Dokumente: 5-10 Minuten
+   • 1000 Dokumente: 1-2 Stunden
+   • Mit LLM-Analyse deutlich länger
+
+F: Benötige ich eine Internet-Verbindung?
+A: Nein, bis auf LLM-Features. Die App arbeitet lokal.
+   Für LLM-Zusammenfassungen muss LM Studio laufen.
+
+F: Was ist LM Studio?
+A: Ein lokaler LLM-Server (wie ChatGPT, aber offline).
+   Download: https://lmstudio.ai
+
+F: Werden meine Daten in die Cloud hochgeladen?
+A: Nein! Alles läuft lokal auf deinem Mac.
+   Keine Telemetrie, keine Cloud-Verbindungen.
+
+F: Kann ich die Verarbeitung unterbrechen?
+A: Ja, mit dem "■ Stoppen" Button.
+   Bereits verarbeitete Dateien bleiben erhalten.
+
+F: Was bedeutet "DSGVO-Klassifizierung"?
+A: Das Tool erkennt personenbezogene Daten und warnt dich:
+   • Gehaltsabrechnungen → sehr schützenswert
+   • Firmen-IBANs → nicht personenbezogen
+   • Gesundheitsdaten → besonders sensibel
+
+F: Wo finde ich die JSON-Dateien?
+A: Im Ausgabeverzeichnis (Standard: ~/LLM)
+   Struktur spiegelt Quellverzeichnis wider.
+
+F: Kann ich mehrere Ordner gleichzeitig verarbeiten?
+A: Wähle einen Hauptordner - Unterordner werden automatisch
+   rekursiv durchsucht (außer ausgeschlossene Patterns).
+
+F: Was sind "Exclude Patterns"?
+A: Ordner die übersprungen werden, z.B.:
+   • Vorlagen
+   • Templates
+   • Archive
+   → Siehe "Erweiterte Einstellungen" → "Ausschlüsse"
+
+F: Wie kann ich Dateitypen ändern?
+A: In FileInventory.py die Variable EXTENSIONS anpassen.
+   GUI-Version zeigt nur aktuelle Einstellungen an.
+
+F: Verbraucht die App viel Speicher?
+A: Normal: 50-200 MB
+   Bei großen PDFs/Bildern: Bis 500 MB
+   Nach Abschluss wird Speicher freigegeben.
+"""
+
+        faq_text.insert("1.0", faq_content)
+        faq_text.config(state="disabled")
+        faq_text.pack(side="left", fill="both", expand=True)
+        faq_scroll.pack(side="right", fill="y")
+
+        # Tab 4: Über
+        about_tab = ttk.Frame(notebook, padding="10")
+        notebook.add(about_tab, text="Über")
+
+        about_text = tk.Text(about_tab, wrap="word", font=('Helvetica', 11))
+        about_scroll = ttk.Scrollbar(about_tab, command=about_text.yview)
+        about_text.configure(yscrollcommand=about_scroll.set)
+
+        about_content = f"""
+📁 FILEINVENTORY
+
+Version: {VERSION}
+Datum: {VERSION_DATE}
+
+BESCHREIBUNG
+KI-gestützte Dokumenten-Analyse mit DSGVO-Klassifizierung.
+Erstellt strukturierte JSON-Datenbanken für RAG-Systeme.
+
+ENTWICKELT VON
+Marc König Unternehmensberatung
+
+TECHNOLOGIE
+• Python 3.12+
+• Tkinter (GUI)
+• LM Studio (LLM-Integration)
+• pdfplumber (PDF-Extraktion)
+• python-docx, python-pptx, openpyxl (Office-Formate)
+• pytesseract (OCR)
+
+QUELLCODE
+Die CLI-Version ist Open Source verfügbar.
+GUI-Version: Proprietär
+
+LIZENZ
+Proprietär - Marc König Unternehmensberatung
+© 2025 Alle Rechte vorbehalten
+
+SUPPORT
+Bei Problemen oder Fragen:
+• GitHub: frankschaefer/dirToLLM
+• E-Mail: Support-Kontakt
+
+CHANGELOG v1.20.0
+• ✅ Grafische Benutzeroberfläche
+• ✅ DSGVO-Bankdaten-Unterscheidung
+• ✅ Erweiterte Einstellungen
+• ✅ Live-Fortschrittsanzeige
+• ✅ Multi-Threading
+
+BEKANNTE EINSCHRÄNKUNGEN
+• OCR benötigt Tesseract-Installation
+• LLM benötigt LM Studio
+• Große Dateien (>100MB) können langsam sein
+
+GEPLANTE FEATURES
+• Drag & Drop Support
+• Export-Funktionen (CSV, Excel)
+• Cloud-Integration
+• Mehrsprachigkeit
+
+MADE WITH ❤️
+Entwickelt mit Claude Code und Liebe zum Detail.
+
+---
+
+FileInventory - Die intelligente Art, Dokumente zu verwalten.
+"""
+
+        about_text.insert("1.0", about_content)
+        about_text.config(state="disabled")
+        about_text.pack(side="left", fill="both", expand=True)
+        about_scroll.pack(side="right", fill="y")
+
+        # Footer mit Links
+        footer_frame = ttk.Frame(main_frame)
+        footer_frame.pack(fill="x", pady=(10, 0))
+
+        ttk.Button(
+            footer_frame,
+            text="📖 README_GUI.md öffnen",
+            command=lambda: self._open_file("README_GUI.md")
+        ).pack(side="left", padx=5)
+
+        ttk.Button(
+            footer_frame,
+            text="📄 Release Notes",
+            command=lambda: self._open_file("RELEASE_NOTES_v1.20.0.md")
+        ).pack(side="left", padx=5)
+
+        ttk.Button(
+            footer_frame,
+            text="🌐 GitHub",
+            command=lambda: os.system("open https://github.com/frankschaefer/dirToLLM")
+        ).pack(side="left", padx=5)
+
+    def _open_file(self, filename):
+        """Öffnet eine Dokumentations-Datei"""
+        filepath = os.path.join(os.path.dirname(__file__), filename)
+        if os.path.exists(filepath):
+            os.system(f"open '{filepath}'")
+        else:
+            messagebox.showwarning(
+                "Datei nicht gefunden",
+                f"Die Datei {filename} wurde nicht gefunden."
+            )
 
 
 def main():
