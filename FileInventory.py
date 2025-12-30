@@ -1825,12 +1825,13 @@ def update_json_with_dsgvo_classification(json_path, src_file_path):
         with open(json_path, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
 
-        # Zeige Ergebnis
+        # Zeige Ergebnis mit Dateinamen
+        filename = os.path.basename(src_file_path)
         if sensitive_classification['contains_sensitive_data']:
-            print(f"  ⚠️  DSGVO: Sensible Daten erkannt - {', '.join(sensitive_classification['data_categories'])} "
+            print(f"  ⚠️  DSGVO [{filename}]: {', '.join(sensitive_classification['data_categories'])} "
                   f"(Schutzklasse: {sensitive_classification['protection_level']})")
         else:
-            print(f"  ✓ DSGVO: Keine besonders schutzbedürftigen Daten erkannt")
+            print(f"  ✓ DSGVO [{filename}]: Keine besonders schutzbedürftigen Daten")
 
         return True
 
