@@ -17,8 +17,8 @@ import argparse
 warnings.filterwarnings('ignore', category=UserWarning, module='openpyxl')
 
 # Version und Metadaten
-VERSION = "1.17.3"
-VERSION_DATE = "2025-12-29"
+VERSION = "1.18.0"
+VERSION_DATE = "2025-12-30"
 SCRIPT_NAME = "FileInventory - OneDrive Dokumenten-Zusammenfassung (macOS)"
 
 # Fehlerbehandlungsmodus: None = fragen, "skip" = weiter ohne Fragen, "ask" = weiter mit Fragen
@@ -73,6 +73,87 @@ EXCLUDE_PATTERNS = [
 
 # Duplikat-Erkennung: Cache für Dateigrößen und Hashes
 _SIZE_HASH_CACHE = {}  # {size: {hash: path}}
+
+# ============================================================================
+# DSGVO / BDSG - Klassifizierung besonders schutzbedürftiger Daten
+# ============================================================================
+# Gemäß Art. 9 DSGVO (besondere Kategorien personenbezogener Daten)
+# und § 26 BDSG (Beschäftigtendaten)
+
+SENSITIVE_DATA_KEYWORDS = {
+    # § 26 BDSG - Beschäftigtendaten
+    "GEHALTSABRECHNUNG": {
+        "keywords": ["lohnabrechnung", "gehaltsabrechnung", "entgeltabrechnung", "gehalt",
+                    "brutto", "netto", "lohnsteuer", "sozialversicherung", "entgelt",
+                    "verdienst", "lohnzettel", "gehaltsmitteilung"],
+        "dsgvo_kategorie": "Art. 9 Abs. 2 lit. b DSGVO i.V.m. § 26 BDSG - Beschäftigtendaten",
+        "schutzklasse": "hoch"
+    },
+    "LEBENSLAUF": {
+        "keywords": ["lebenslauf", "curriculum vitae", "cv", "bewerbung", "werdegang",
+                    "beruflicher werdegang", "vita", "bewerbungsunterlagen", "qualifikation"],
+        "dsgvo_kategorie": "§ 26 BDSG - Beschäftigtendaten (Bewerber)",
+        "schutzklasse": "hoch"
+    },
+    "ARBEITSVERTRAG": {
+        "keywords": ["arbeitsvertrag", "anstellungsvertrag", "dienstvertrag", "arbeitgeber",
+                    "arbeitnehmer", "arbeitsverh\u00e4ltnis", "vertragspartei", "probezeit",
+                    "k\u00fcndigung", "befristet", "unbefristet"],
+        "dsgvo_kategorie": "§ 26 BDSG - Beschäftigtendaten",
+        "schutzklasse": "hoch"
+    },
+    "ZEUGNIS": {
+        "keywords": ["arbeitszeugnis", "zwischenzeugnis", "zeugnis", "beurteilung",
+                    "leistungsbeurteilung", "qualifiziertes zeugnis", "einfaches zeugnis"],
+        "dsgvo_kategorie": "§ 26 BDSG - Beschäftigtendaten",
+        "schutzklasse": "hoch"
+    },
+    "PERSONALAKTE": {
+        "keywords": ["personalakte", "personaldaten", "mitarbeiterdaten", "personalstammdaten",
+                    "personalnummer", "mitarbeiter", "besch\u00e4ftigte"],
+        "dsgvo_kategorie": "§ 26 BDSG - Beschäftigtendaten",
+        "schutzklasse": "sehr hoch"
+    },
+
+    # Art. 9 DSGVO - Gesundheitsdaten
+    "GESUNDHEITSDATEN": {
+        "keywords": ["attest", "arbeitsunf\u00e4higkeit", "krankheit", "arzt", "gesundheit",
+                    "schwerbehinderung", "au-bescheinigung", "krankmeldung", "medizinisch",
+                    "diagnose", "therapie", "reha", "betriebsarzt"],
+        "dsgvo_kategorie": "Art. 9 Abs. 1 DSGVO - Gesundheitsdaten",
+        "schutzklasse": "sehr hoch"
+    },
+
+    # Sozialversicherung und Steuern (§ 26 BDSG)
+    "SOZIALVERSICHERUNG": {
+        "keywords": ["sozialversicherungsnummer", "rentenversicherung", "krankenversicherung",
+                    "sv-nummer", "versicherungsnummer", "krankenkasse", "rentenversicherungsnummer"],
+        "dsgvo_kategorie": "§ 26 BDSG - Beschäftigtendaten (Sozialversicherung)",
+        "schutzklasse": "sehr hoch"
+    },
+    "STEUER": {
+        "keywords": ["lohnsteuerbescheinigung", "steuernummer", "finanzamt", "steuerklasse",
+                    "steuer-id", "identifikationsnummer", "elstam", "lohnsteuer"],
+        "dsgvo_kategorie": "§ 26 BDSG - Beschäftigtendaten (Steuerdaten)",
+        "schutzklasse": "sehr hoch"
+    },
+
+    # Ausweisdokumente
+    "AUSWEIS": {
+        "keywords": ["personalausweis", "reisepass", "ausweisnummer", "pass-nummer",
+                    "ausweiskopie", "identit\u00e4tsnachweis", "ausweisdokument"],
+        "dsgvo_kategorie": "Art. 6 Abs. 1 DSGVO - Identifikationsdaten",
+        "schutzklasse": "sehr hoch"
+    },
+
+    # Bankdaten
+    "BANKDATEN": {
+        "keywords": ["iban", "bankverbindung", "kontonummer", "bankdaten", "bic",
+                    "kontof\u00fchrung", "kreditinstitut", "geldinstitut"],
+        "dsgvo_kategorie": "Art. 6 Abs. 1 DSGVO - Finanzdaten",
+        "schutzklasse": "hoch"
+    }
+}
 
 # Prüfe OCR-Verfügbarkeit global (einmalig beim Start)
 OCR_AVAILABLE = False
@@ -614,6 +695,79 @@ def extract_entities_from_path(file_path):
                 break
 
     return entities
+
+def classify_sensitive_data(text, file_path=None):
+    """
+    Klassifiziert Dokumente hinsichtlich besonders schutzbedürftiger personenbezogener Daten
+    gemäß Art. 9 DSGVO und § 26 BDSG.
+
+    Analysiert Dateiname, Pfad und Textinhalt auf Schlüsselbegriffe für:
+    - Beschäftigtendaten (§ 26 BDSG)
+    - Gesundheitsdaten (Art. 9 DSGVO)
+    - Weitere sensible personenbezogene Daten
+
+    Args:
+        text: Der zu analysierende Dokumententext
+        file_path: Optional - Pfad zur Datei (für Dateiname-Analyse)
+
+    Returns:
+        dict: {
+            'contains_sensitive_data': bool,
+            'data_categories': [str],  # Liste erkannter Kategorien
+            'dsgvo_classification': [str],  # DSGVO-Artikel
+            'protection_level': str,  # 'hoch' oder 'sehr hoch'
+            'matched_keywords': {kategorie: [keywords]}  # Gefundene Keywords pro Kategorie
+        }
+    """
+    import re
+
+    result = {
+        'contains_sensitive_data': False,
+        'data_categories': [],
+        'dsgvo_classification': [],
+        'protection_level': None,
+        'matched_keywords': {}
+    }
+
+    # Kombiniere Text und Dateiname für Analyse
+    search_text = text.lower()
+    if file_path:
+        filename = os.path.basename(file_path).lower()
+        search_text = filename + " " + search_text
+
+    highest_protection = None
+    protection_levels = {'hoch': 1, 'sehr hoch': 2}
+
+    # Prüfe jede Kategorie
+    for category_name, category_data in SENSITIVE_DATA_KEYWORDS.items():
+        matched_keywords = []
+
+        # Prüfe Keywords in dieser Kategorie
+        for keyword in category_data['keywords']:
+            # Verwende Word-Boundary für präzise Treffer
+            pattern = r'\b' + re.escape(keyword) + r'\b'
+            if re.search(pattern, search_text, re.IGNORECASE):
+                matched_keywords.append(keyword)
+
+        # Falls mindestens 1 Keyword gefunden wurde
+        if matched_keywords:
+            result['contains_sensitive_data'] = True
+            result['data_categories'].append(category_name)
+            result['matched_keywords'][category_name] = matched_keywords
+
+            # Füge DSGVO-Kategorie hinzu (ohne Duplikate)
+            dsgvo_cat = category_data['dsgvo_kategorie']
+            if dsgvo_cat not in result['dsgvo_classification']:
+                result['dsgvo_classification'].append(dsgvo_cat)
+
+            # Aktualisiere höchste Schutzklasse
+            current_level = category_data['schutzklasse']
+            if highest_protection is None or protection_levels.get(current_level, 0) > protection_levels.get(highest_protection, 0):
+                highest_protection = current_level
+
+    result['protection_level'] = highest_protection
+
+    return result
 
 def get_prompt_for_filetype(file_ext, summary_max_chars=1500):
     """
@@ -1402,6 +1556,16 @@ def process_file(src_file):
     # Berechne Content-Hash für Änderungserkennung
     content_hash = calculate_content_hash(src_file)
 
+    # Klassifiziere sensible/schutzbedürftige Daten gemäß DSGVO/BDSG
+    print("Klassifiziere DSGVO-relevante Inhalte...")
+    sensitive_classification = classify_sensitive_data(text, file_path=src_file)
+
+    # Zeige Klassifizierungsergebnis
+    if sensitive_classification['contains_sensitive_data']:
+        print(f"  ⚠️  DSGVO-WARNUNG: Besonders schutzbedürftige Daten erkannt!")
+        print(f"      Kategorien: {', '.join(sensitive_classification['data_categories'])}")
+        print(f"      Schutzklasse: {sensitive_classification['protection_level']}")
+
     metadata = {
         "path": rel_path,
         "ext": path_obj.suffix.lower(),
@@ -1421,6 +1585,14 @@ def process_file(src_file):
             "urls": entities.get('urls', []),
             "emails": entities.get('emails', []),
             "phone_numbers": entities.get('phone_numbers', [])
+        },
+        # DSGVO/BDSG-Klassifizierung
+        "dsgvo_classification": {
+            "contains_sensitive_data": sensitive_classification['contains_sensitive_data'],
+            "data_categories": sensitive_classification['data_categories'],
+            "legal_basis": sensitive_classification['dsgvo_classification'],
+            "protection_level": sensitive_classification['protection_level'],
+            "detected_keywords": sensitive_classification['matched_keywords']
         }
     }
 
@@ -1575,6 +1747,97 @@ def update_json_with_contact_info(json_path, src_file_path):
 
     except Exception as e:
         print(f"Fehler beim Nachtragen der Kontaktinformationen: {e}")
+        return False
+
+def update_json_with_dsgvo_classification(json_path, src_file_path):
+    """
+    Trägt DSGVO-Klassifizierung in existierende JSON-Dateien nach.
+    Sehr schnell (nur Regex, kein LLM), analysiert Text auf sensible Daten.
+
+    Args:
+        json_path: Pfad zur JSON-Datei
+        src_file_path: Pfad zur Quelldatei (zum Text-Extrahieren)
+
+    Returns:
+        True wenn Update durchgeführt wurde, False wenn nicht nötig
+    """
+    try:
+        # Lese JSON
+        with open(json_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+
+        # Prüfe ob DSGVO-Klassifizierung fehlt oder veraltet ist
+        needs_classification = 'dsgvo_classification' not in data
+
+        # Wenn nichts zu tun ist, überspringe
+        if not needs_classification:
+            return False
+
+        # Extrahiere Text aus Quelldatei (verwende existierende Funktionen)
+        path_obj = pathlib.Path(src_file_path)
+        file_ext = path_obj.suffix.lower()
+
+        # Nutze die bestehenden Extract-Funktionen
+        text = ""
+        try:
+            if file_ext == ".pdf":
+                text, _ = extract_text_pdf(src_file_path)
+            elif file_ext in {".docx", ".doc"}:
+                text = extract_text_docx(src_file_path)
+            elif file_ext in {".pptx", ".ppt"}:
+                text = extract_text_pptx(src_file_path)
+            elif file_ext in {".xlsx", ".xls", ".xlsm", ".xltx"}:
+                text = extract_text_excel(src_file_path)
+            elif file_ext in {".txt", ".md"}:
+                with open(src_file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    text = f.read()
+            elif file_ext in {".png", ".jpg", ".jpeg"}:
+                # Für Bilder: Verwende Summary falls vorhanden
+                text = data.get('summary', '')
+            else:
+                print(f"Unbekannter Dateityp für DSGVO-Update: {file_ext}")
+                return False
+        except Exception as e:
+            print(f"Fehler beim Text-Extrahieren für DSGVO-Klassifizierung: {e}")
+            return False
+
+        if not text or not text.strip():
+            # Kein Text verfügbar - verwende Summary als Fallback
+            text = data.get('summary', '')
+
+        if not text or not text.strip():
+            print("  ⚠️  Kein Text für DSGVO-Klassifizierung verfügbar")
+            return False
+
+        # Klassifiziere
+        sensitive_classification = classify_sensitive_data(text, file_path=src_file_path)
+
+        # Füge DSGVO-Klassifizierung hinzu
+        data['dsgvo_classification'] = {
+            "contains_sensitive_data": sensitive_classification['contains_sensitive_data'],
+            "data_categories": sensitive_classification['data_categories'],
+            "legal_basis": sensitive_classification['dsgvo_classification'],
+            "protection_level": sensitive_classification['protection_level'],
+            "detected_keywords": sensitive_classification['matched_keywords']
+        }
+
+        # Speichere aktualisierte JSON
+        with open(json_path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+
+        # Zeige Ergebnis
+        if sensitive_classification['contains_sensitive_data']:
+            print(f"  ⚠️  DSGVO: Sensible Daten erkannt - {', '.join(sensitive_classification['data_categories'])} "
+                  f"(Schutzklasse: {sensitive_classification['protection_level']})")
+        else:
+            print(f"  ✓ DSGVO: Keine besonders schutzbedürftigen Daten erkannt")
+
+        return True
+
+    except Exception as e:
+        print(f"Fehler beim DSGVO-Update: {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
 def validate_json_file(json_path, src_file_path=None):
@@ -2159,6 +2422,103 @@ def cleanup_invalid_phone_numbers():
     print(f"Gesamtzeit: {format_time(total_time)}")
     print("=" * 80)
 
+def update_all_jsons_with_dsgvo():
+    """
+    Aktualisiert alle vorhandenen JSON-Dateien mit DSGVO-Klassifizierung.
+    Analysiert Dokumente auf besonders schutzbedürftige personenbezogene Daten
+    gemäß Art. 9 DSGVO und § 26 BDSG.
+    Sehr schnell - nur Regex, kein LLM.
+    """
+    print("\n" + "=" * 80)
+    print("DSGVO-UPDATE: KLASSIFIZIERUNG BESONDERS SCHUTZBEDÜRFTIGER DATEN")
+    print("=" * 80)
+    print(f"Analysiere Dokumente gemäß Art. 9 DSGVO und § 26 BDSG")
+    print(f"Durchsuche: {DST_ROOT}")
+    print("=" * 80 + "\n")
+
+    # Sammle alle JSON-Dateien
+    all_json_files = []
+    for root, dirs, files in os.walk(DST_ROOT):
+        # Sortiere für konsistente Reihenfolge
+        dirs.sort()
+        files.sort()
+
+        for name in files:
+            if name.endswith('.json'):
+                full_path = os.path.join(root, name)
+                all_json_files.append(full_path)
+
+    total_files = len(all_json_files)
+    print(f"Gefunden: {total_files:,} JSON-Dateien\n")
+
+    if total_files == 0:
+        print("Keine JSON-Dateien gefunden.")
+        return
+
+    # Statistiken
+    files_updated = 0
+    files_with_sensitive_data = 0
+    sensitive_categories = {}
+    start_time = time.time()
+
+    for idx, json_file in enumerate(all_json_files, 1):
+        try:
+            # Bestimme Quelldatei
+            # JSON-Dateien enden mit ".original_extension.json"
+            rel_path = os.path.relpath(json_file, DST_ROOT)
+            src_rel_path = rel_path.replace('.json', '')  # Entferne .json
+            src_file = os.path.join(SRC_ROOT, src_rel_path)
+
+            if not os.path.exists(src_file):
+                continue
+
+            # Rufe DSGVO-Update auf
+            was_updated = update_json_with_dsgvo_classification(json_file, src_file)
+
+            if was_updated:
+                files_updated += 1
+
+                # Lese JSON um zu prüfen ob sensible Daten gefunden wurden
+                try:
+                    with open(json_file, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                        dsgvo = data.get('dsgvo_classification', {})
+                        if dsgvo.get('contains_sensitive_data'):
+                            files_with_sensitive_data += 1
+                            # Sammle Kategorien für Statistik
+                            for category in dsgvo.get('data_categories', []):
+                                sensitive_categories[category] = sensitive_categories.get(category, 0) + 1
+                except:
+                    pass
+
+            # Fortschritt anzeigen
+            if idx % 50 == 0 or idx == total_files:
+                elapsed = time.time() - start_time
+                progress = (idx / total_files) * 100
+                print(f"\rFortschritt: {idx:,}/{total_files:,} ({progress:.1f}%) - "
+                      f"Aktualisiert: {files_updated:,} - Sensible Daten: {files_with_sensitive_data:,} - "
+                      f"Zeit: {elapsed:.1f}s", end="", flush=True)
+
+        except Exception as e:
+            print(f"\nFehler bei {json_file}: {e}")
+
+    # Abschlussbericht
+    total_time = time.time() - start_time
+    print(f"\n\n" + "=" * 80)
+    print("DSGVO-UPDATE ABGESCHLOSSEN")
+    print("=" * 80)
+    print(f"Gescannte Dateien: {total_files:,}")
+    print(f"Aktualisierte Dateien: {files_updated:,}")
+    print(f"Dateien mit sensiblen Daten: {files_with_sensitive_data:,}")
+
+    if sensitive_categories:
+        print(f"\nGefundene Kategorien besonders schutzbedürftiger Daten:")
+        for category, count in sorted(sensitive_categories.items(), key=lambda x: x[1], reverse=True):
+            print(f"  • {category}: {count:,} Dokumente")
+
+    print(f"\nGesamtzeit: {format_time(total_time)}")
+    print("=" * 80)
+
 def create_combined_database(max_size_mb=30, output_dir=None):
     """
     Erstellt kombinierte JSON-Datenbank-Dateien aus allen einzelnen JSON-Dateien.
@@ -2370,6 +2730,11 @@ Beispiele:
     Bereinigt alle JSON-Dateien: Entfernt ungültige Telefonnummern (z.B. Projektnummern)
     und extrahiert korrekte Telefonnummern neu aus den Quelldateien
 
+  {sys.argv[0]} --update-dsgvo
+    Aktualisiert alle bestehenden JSON-Dateien mit DSGVO-Klassifizierung.
+    Analysiert Dokumente auf besonders schutzbedürftige personenbezogene Daten
+    gemäß Art. 9 DSGVO und § 26 BDSG (sehr schnell, kein LLM)
+
   {sys.argv[0]} --version
     Zeigt Versionsinformation an
 
@@ -2441,6 +2806,12 @@ Weitere Informationen:
     )
 
     parser.add_argument(
+        '--update-dsgvo',
+        action='store_true',
+        help='Aktualisiert alle JSON-Dateien mit DSGVO-Klassifizierung (Art. 9 DSGVO, § 26 BDSG)'
+    )
+
+    parser.add_argument(
         '--max-database-size',
         type=int,
         metavar='MB',
@@ -2475,6 +2846,11 @@ if __name__ == "__main__":
     # Prüfe ob Telefonnummern-Bereinigung gewünscht ist
     if args.cleanup_phones:
         cleanup_invalid_phone_numbers()
+        sys.exit(0)
+
+    # Prüfe ob DSGVO-Update gewünscht ist
+    if args.update_dsgvo:
+        update_all_jsons_with_dsgvo()
         sys.exit(0)
 
     # Prüfe ob Datenbank-Erstellung gewünscht ist

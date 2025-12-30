@@ -1,7 +1,7 @@
 # FileInventory - OneDrive Dokumenten-Zusammenfassung (macOS)
 
-**Version:** 1.12.0
-**Datum:** 2025-12-28
+**Version:** 1.18.0
+**Datum:** 2025-12-30
 **Lizenz:** Proprietär
 
 ## Übersicht
@@ -13,7 +13,8 @@ FileInventory ist ein intelligentes Python-Tool zur automatischen Analyse und Zu
 - **Multiformat-Unterstützung**: PDF, Word (.docx/.doc), Excel (.xlsx/.xls/.xlsm/.xltx), PowerPoint (.pptx/.ppt), Text, Markdown und Bilder
 - **OCR-Unterstützung**: Automatische Texterkennung für gescannte PDFs mit Tesseract OCR
 - **RAG-Optimierung**: Wissensextraktion für semantische Suche mit Schlüsselbegriffen und strukturierter Zusammenfassung
-- **Named Entity Recognition**: Automatische Extraktion von Firmen, Personen, Institutionen und Organisationen (NEU in v1.12.0)
+- **Named Entity Recognition**: Automatische Extraktion von Firmen, Personen, Institutionen und Organisationen
+- **DSGVO-Klassifizierung**: Automatische Erkennung besonders schutzbedürftiger personenbezogener Daten gemäß Art. 9 DSGVO und § 26 BDSG (NEU in v1.18.0)
 - **Kombinierte Datenbank**: Erstellt durchsuchbare JSON-Datenbanken für ChatGPT/Claude
 - **macOS-optimiert**: Native macOS-Unterstützung mit OneDrive-Integration
 - **LLM-basierte Analyse**: Intelligente Zusammenfassungen mit RAG-optimierten, dateityp-spezifischen Prompts
@@ -254,6 +255,9 @@ python3 FileInventory.py --create-database --max-database-size 50
 # Datenbank in benutzerdefiniertem Verzeichnis
 python3 FileInventory.py --create-database --database-output ~/MyDatabase
 
+# DSGVO-Klassifizierung für bestehende JSONs hinzufügen
+python3 FileInventory.py --update-dsgvo
+
 # Standard-Verzeichnisse und -Einstellungen verwenden
 python3 FileInventory.py
 ```
@@ -270,6 +274,8 @@ python3 FileInventory.py
 | `--create-database` | Erstellt kombinierte JSON-Datenbank aus allen einzelnen JSON-Dateien | - |
 | `--database-output DIR` | Ausgabeverzeichnis für Datenbank-Dateien | `~/LLM/database` |
 | `--max-database-size MB` | Maximale Größe pro Datenbank-Datei in MB | `30` |
+| `--cleanup-phones` | Bereinigt ungültige Telefonnummern aus allen JSON-Dateien | - |
+| `--update-dsgvo` | Aktualisiert alle JSON-Dateien mit DSGVO-Klassifizierung | - |
 
 ### Basis-Ausführung
 
@@ -428,7 +434,18 @@ Für jede verarbeitete Datei wird eine JSON-Datei erstellt:
     "companies": ["Kunde A GmbH"],
     "persons": ["Marc König"],
     "institutions": [],
-    "organizations": []
+    "organizations": [],
+    "projects": [],
+    "urls": [],
+    "emails": ["kontakt@kunde-a.de"],
+    "phone_numbers": ["+49 30 12345678"]
+  },
+  "dsgvo_classification": {
+    "contains_sensitive_data": false,
+    "data_categories": [],
+    "legal_basis": [],
+    "protection_level": null,
+    "detected_keywords": {}
   },
   "ocr_info": {
     "used_ocr": true,
@@ -456,6 +473,16 @@ Für jede verarbeitete Datei wird eine JSON-Datei erstellt:
 | `entities.persons` | **Array:** Liste extrahierter Personennamen |
 | `entities.institutions` | **Array:** Liste extrahierter Institutionen (Behörden, Universitäten, etc.) |
 | `entities.organizations` | **Array:** Liste extrahierter Organisationen (Vereine, Verbände, NGOs, etc.) |
+| `entities.projects` | **Array:** Liste extrahierter Projektnamen |
+| `entities.urls` | **Array:** Liste extrahierter URLs |
+| `entities.emails` | **Array:** Liste extrahierter E-Mail-Adressen |
+| `entities.phone_numbers` | **Array:** Liste extrahierter Telefonnummern |
+| `dsgvo_classification` | **Objekt:** DSGVO-Klassifizierung (NEU in v1.18.0) |
+| `dsgvo_classification.contains_sensitive_data` | Boolean - ob besonders schutzbedürftige Daten erkannt wurden |
+| `dsgvo_classification.data_categories` | **Array:** Erkannte Kategorien (z.B. GEHALTSABRECHNUNG, LEBENSLAUF, GESUNDHEITSDATEN) |
+| `dsgvo_classification.legal_basis` | **Array:** Rechtliche Grundlagen (Art. 9 DSGVO, § 26 BDSG) |
+| `dsgvo_classification.protection_level` | String - Schutzklasse ("hoch", "sehr hoch" oder null) |
+| `dsgvo_classification.detected_keywords` | **Objekt:** Gefundene Keywords pro Kategorie |
 | `ocr_info` | **Optional:** OCR-Metadaten (nur bei gescannten PDFs) |
 | `ocr_info.used_ocr` | Boolean - ob OCR verwendet wurde |
 | `ocr_info.ocr_pages` | Anzahl der Seiten, die mit OCR verarbeitet wurden |
@@ -757,22 +784,193 @@ for s in summaries:
 
 ---
 
+## DSGVO-Klassifizierung (NEU in v1.18.0)
+
+### Übersicht
+
+FileInventory erkennt automatisch **besonders schutzbedürftige personenbezogene Daten** gemäß:
+- **Art. 9 DSGVO** - Besondere Kategorien personenbezogener Daten (Gesundheitsdaten)
+- **§ 26 BDSG** - Beschäftigtendaten
+
+### Erkannte Kategorien
+
+Das System klassifiziert folgende Dokumenttypen:
+
+#### Beschäftigtendaten (§ 26 BDSG)
+- **GEHALTSABRECHNUNG**: Lohnabrechnungen, Entgeltabrechnungen
+- **LEBENSLAUF**: Bewerbungsunterlagen, CVs
+- **ARBEITSVERTRAG**: Arbeitsverträge, Anstellungsverträge
+- **ZEUGNIS**: Arbeitszeugnisse, Beurteilungen
+- **PERSONALAKTE**: Personalakten, Mitarbeiterdaten
+
+#### Gesundheitsdaten (Art. 9 DSGVO)
+- **GESUNDHEITSDATEN**: Atteste, AU-Bescheinigungen, medizinische Dokumente
+
+#### Sozialversicherung & Steuern
+- **SOZIALVERSICHERUNG**: SV-Nummer, Rentenversicherungsnachweise
+- **STEUER**: Lohnsteuerbescheinigungen, Steuer-ID
+
+#### Weitere sensible Daten
+- **AUSWEIS**: Personalausweiskopien, Reisepässe
+- **BANKDATEN**: IBAN, Kontonummern
+
+### Verwendung
+
+#### Automatische Klassifizierung bei neuen Dokumenten
+
+Alle **neu verarbeiteten** Dokumente werden automatisch klassifiziert:
+
+```bash
+python3 FileInventory.py
+```
+
+Während der Verarbeitung wird angezeigt:
+
+```
+Klassifiziere DSGVO-relevante Inhalte...
+  ⚠️  DSGVO-WARNUNG: Besonders schutzbedürftige Daten erkannt!
+      Kategorien: GEHALTSABRECHNUNG
+      Schutzklasse: hoch
+```
+
+#### Bestehende JSON-Dateien aktualisieren
+
+Für bereits verarbeitete Dokumente können Sie die Klassifizierung nachtragen:
+
+```bash
+# Aktiviere virtuelle Umgebung
+source .venv/bin/activate
+
+# Aktualisiere alle JSON-Dateien mit DSGVO-Klassifizierung
+python3 FileInventory.py --update-dsgvo
+```
+
+**Vorteile:**
+- ⚡ **Sehr schnell** - Nur Regex, kein LLM
+- 🔒 **Keine neue LLM-Verarbeitung** nötig
+- 📊 **Detaillierte Statistik** nach Abschluss
+
+**Beispielausgabe:**
+
+```
+================================================================================
+DSGVO-UPDATE: KLASSIFIZIERUNG BESONDERS SCHUTZBEDÜRFTIGER DATEN
+================================================================================
+Analysiere Dokumente gemäß Art. 9 DSGVO und § 26 BDSG
+Durchsuche: ~/LLM
+================================================================================
+
+Gefunden: 6,283 JSON-Dateien
+
+Fortschritt: 6,283/6,283 (100.0%) - Aktualisiert: 6,283 - Sensible Daten: 127 - Zeit: 45.2s
+
+================================================================================
+DSGVO-UPDATE ABGESCHLOSSEN
+================================================================================
+Gescannte Dateien: 6,283
+Aktualisierte Dateien: 6,283
+Dateien mit sensiblen Daten: 127
+
+Gefundene Kategorien besonders schutzbedürftiger Daten:
+  • GEHALTSABRECHNUNG: 45 Dokumente
+  • LEBENSLAUF: 38 Dokumente
+  • ARBEITSVERTRAG: 22 Dokumente
+  • BANKDATEN: 12 Dokumente
+  • ZEUGNIS: 10 Dokumente
+
+Gesamtzeit: 45.2s
+================================================================================
+```
+
+### Integration und Suche
+
+#### Suche nach sensiblen Dokumenten
+
+```python
+import json
+import glob
+
+# Alle JSON-Dateien einlesen
+summaries = []
+for json_file in glob.glob(os.path.expanduser("~/LLM/**/*.json"), recursive=True):
+    with open(json_file, 'r', encoding='utf-8') as f:
+        summaries.append(json.load(f))
+
+# Alle Dokumente mit sensiblen Daten finden
+sensitive_docs = [s for s in summaries
+                  if s.get("dsgvo_classification", {}).get("contains_sensitive_data")]
+
+print(f"Gefunden: {len(sensitive_docs)} Dokumente mit sensiblen Daten")
+
+# Nach Schutzklasse filtern
+very_high = [s for s in sensitive_docs
+             if s.get("dsgvo_classification", {}).get("protection_level") == "sehr hoch"]
+
+# Nach Kategorien filtern
+gehaltsabrechnungen = [s for s in sensitive_docs
+                       if "GEHALTSABRECHNUNG" in s.get("dsgvo_classification", {}).get("data_categories", [])]
+
+# Statistik erstellen
+from collections import Counter
+categories = []
+for s in sensitive_docs:
+    categories.extend(s.get("dsgvo_classification", {}).get("data_categories", []))
+category_stats = Counter(categories).most_common()
+
+print("\nKategorien:")
+for category, count in category_stats:
+    print(f"  {category}: {count} Dokumente")
+```
+
+### Datenschutz-Hinweise
+
+**Wichtig:**
+- Die DSGVO-Klassifizierung erfolgt **ausschließlich keyword-basiert** (Regex)
+- **Kein LLM-Zugriff** auf den Dokumentinhalt bei `--update-dsgvo`
+- Originaldokumente bleiben **unverändert**
+- Klassifizierung dient der **besseren Auffindbarkeit** sensibler Daten
+- Hilft bei **Compliance-Prüfungen** und **Datenaudits**
+
+**Empfehlung:**
+- Regelmäßige Überprüfung der als "sensibel" klassifizierten Dokumente
+- Angemessene Zugriffskontrollen für Dokumente mit hoher Schutzklasse
+- Dokumentation der Verarbeitungszwecke gemäß DSGVO Art. 30
+
+---
+
 ## Sicherheit und Datenschutz
 
 ### Lokale Verarbeitung
 - **Alle Daten bleiben lokal**: Keine Cloud-API-Aufrufe
 - **OneDrive-Dateien**: Lokal synchronisiert und verarbeitet
 - **LLM-Inferenz**: Vollständig offline über LM Studio
+- **DSGVO-Klassifizierung**: Regex-basiert, kein LLM-Zugriff (bei `--update-dsgvo`)
 
 ### Datensicherheit
 - JSON-Ausgaben enthalten nur Metadaten und Zusammenfassungen
 - Originaldateien bleiben unverändert
 - Keine Übertragung sensibler Informationen
 - Keine Telemetrie oder Analytics
+- DSGVO-konforme Verarbeitung personenbezogener Daten
 
 ---
 
 ## Versionsverlauf
+
+### Version 1.18.0 (2025-12-30)
+- **Neu**: DSGVO-Klassifizierung für besonders schutzbedürftige personenbezogene Daten
+- **Neu**: Automatische Erkennung gemäß Art. 9 DSGVO (Gesundheitsdaten) und § 26 BDSG (Beschäftigtendaten)
+- **Neu**: 10 Kategorien: Gehaltsabrechnungen, Lebensläufe, Arbeitsverträge, Zeugnisse, Personalakten, Gesundheitsdaten, Sozialversicherung, Steuerdaten, Ausweise, Bankdaten
+- **Neu**: `classify_sensitive_data()` Funktion mit Keyword-basierter Erkennung (Regex)
+- **Neu**: `dsgvo_classification` Objekt in JSON-Ausgabe mit Kategorien, Rechtsgrundlagen und Schutzklassen
+- **Neu**: `--update-dsgvo` Parameter zum Aktualisieren bestehender JSON-Dateien (sehr schnell, kein LLM)
+- **Neu**: `update_json_with_dsgvo_classification()` Funktion für inkrementelles Update
+- **Neu**: `update_all_jsons_with_dsgvo()` Batch-Verarbeitung aller JSON-Dateien
+- **Neu**: Schutzklassen ("hoch" / "sehr hoch") basierend auf Datenkategorie
+- **Neu**: Detaillierte Statistiken mit gefundenen Kategorien und Dokumentenanzahl
+- **Verbessert**: Warnungen während der Verarbeitung bei Erkennung sensibler Daten
+- **Dokumentiert**: Umfangreicher README-Abschnitt mit Beispielen und Datenschutzhinweisen
+- **Compliance**: Hilft bei DSGVO-Audits und Datenklassifizierung
 
 ### Version 1.12.0 (2025-12-28)
 - **Neu**: Named Entity Recognition (NER) - Automatische Extraktion von Firmen, Personen, Institutionen und Organisationen
