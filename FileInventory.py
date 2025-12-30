@@ -1787,7 +1787,7 @@ def update_json_with_dsgvo_classification(json_path, src_file_path):
             elif file_ext in {".pptx", ".ppt"}:
                 text = extract_text_pptx(src_file_path)
             elif file_ext in {".xlsx", ".xls", ".xlsm", ".xltx"}:
-                text = extract_text_excel(src_file_path)
+                text = extract_text_xlsx(src_file_path)
             elif file_ext in {".txt", ".md"}:
                 with open(src_file_path, 'r', encoding='utf-8', errors='ignore') as f:
                     text = f.read()
