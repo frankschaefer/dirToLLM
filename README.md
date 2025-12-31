@@ -191,7 +191,7 @@ tesseract --list-langs
 
 ```python
 # Quellverzeichnis (OneDrive)
-SRC_ROOT = os.path.expanduser("~/OneDrive - Marc König Unternehmensberatung")
+SRC_ROOT = os.path.expanduser("~/OneDrive - CompanyName")
 
 # Zielverzeichnis für JSON-Ausgaben
 DST_ROOT = os.path.expanduser("~/LLM")
@@ -268,7 +268,7 @@ python3 FileInventory.py
 |-----------|--------------|----------|
 | `-h`, `--help` | Zeigt Hilfe und alle verfügbaren Optionen | - |
 | `--version` | Zeigt Versionsinformation | - |
-| `--src VERZEICHNIS` | Quellverzeichnis für Dokumente | `~/OneDrive - Marc König Unternehmensberatung` |
+| `--src VERZEICHNIS` | Quellverzeichnis für Dokumente | `~/OneDrive - CompanyName` |
 | `--dst VERZEICHNIS` | Zielverzeichnis für JSON-Dateien | `~/LLM` |
 | `--max-tokens TOKENS` | Maximale Context-Länge des Modells in Tokens | `262144` |
 | `--create-database` | Erstellt kombinierte JSON-Datenbank aus allen einzelnen JSON-Dateien | - |
@@ -359,8 +359,8 @@ Jede Datenbank-Datei enthält Metadaten und alle Dokumente:
 {
   "metadata": {
     "created": "2025-12-28T19:18:03.965074",
-    "source_directory": "/Users/fs_mku/OneDrive - Marc König Unternehmensberatung",
-    "json_directory": "/Users/fs_mku/LLM",
+    "source_directory": "/Users/username/OneDrive - CompanyName",
+    "json_directory": "/Users/username/LLM",
     "script_version": "1.9.0",
     "script_date": "2025-12-28",
     "batch_number": 1,
@@ -386,7 +386,7 @@ Jede Datenbank-Datei enthält Metadaten und alle Dokumente:
 2. **Stelle Fragen** über Ihre Dokumente:
    - "Suche alle Projekte mit dem Kunden X"
    - "Welche Dokumente erwähnen digitale Transformation?"
-   - "Finde alle PDFs von Marc König"
+   - "Finde alle PDFs von [specific person]"
    - "Liste alle Dokumente mit dem Keyword 'Innovation' auf"
 
 #### Erweiterte Optionen
@@ -421,10 +421,10 @@ Für jede verarbeitete Datei wird eine JSON-Datei erstellt:
   "created": "2025-01-15T10:30:00",
   "modified": "2025-01-20T14:45:00",
   "chars": 15420,
-  "summary": "Projektübersicht für Kunde A mit Marc König als Projektleiter. Beschreibt Meilensteine Q1-Q4 2025 mit Fokus auf digitale Transformation und Prozessoptimierung.",
+  "summary": "Projektübersicht für Kunde A mit John Doe als Projektleiter. Beschreibt Meilensteine Q1-Q4 2025 mit Fokus auf digitale Transformation und Prozessoptimierung.",
   "keywords": [
     "Projektübersicht",
-    "Marc König",
+    "John Doe",
     "Meilensteine 2025",
     "Digitale Transformation",
     "Prozessoptimierung",
@@ -432,7 +432,7 @@ Für jede verarbeitete Datei wird eine JSON-Datei erstellt:
   ],
   "entities": {
     "companies": ["Kunde A GmbH"],
-    "persons": ["Marc König"],
+    "persons": ["John Doe"],
     "institutions": [],
     "organizations": [],
     "projects": [],
@@ -733,7 +733,7 @@ for json_file in glob.glob(os.path.expanduser("~/LLM/**/*.json"), recursive=True
         summaries.append(data)
 
 # Suche nach Personennamen in der Zusammenfassung
-results = [s for s in summaries if "Marc König" in s.get("summary", "")]
+results = [s for s in summaries if "John Doe" in s.get("summary", "")]
 
 # Suche nach Keywords
 keyword_results = [s for s in summaries if "Digitale Transformation" in s.get("keywords", [])]
@@ -741,11 +741,11 @@ keyword_results = [s for s in summaries if "Digitale Transformation" in s.get("k
 # Suche nach Named Entities (NEU in v1.12.0)
 # Alle Dokumente mit einer bestimmten Firma
 company_docs = [s for s in summaries
-                if "Lott GmbH" in s.get("entities", {}).get("companies", [])]
+                if "Example Corp" in s.get("entities", {}).get("companies", [])]
 
 # Alle Dokumente mit einer bestimmten Person
 person_docs = [s for s in summaries
-               if "Christian Lott" in s.get("entities", {}).get("persons", [])]
+               if "Jane Smith" in s.get("entities", {}).get("persons", [])]
 
 # Alle Dokumente mit Institutionen
 institution_docs = [s for s in summaries
@@ -754,7 +754,7 @@ institution_docs = [s for s in summaries
 # Kombinierte Entity-Suche
 multi_entity = [s for s in summaries
                 if any(company in s.get("entities", {}).get("companies", [])
-                       for company in ["Lott GmbH", "BMWK"])]
+                       for company in ["Example Corp", "Sample Inc"])]
 
 # Gruppierung nach Firmen
 from collections import Counter

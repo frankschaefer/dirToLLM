@@ -743,7 +743,7 @@ class FileInventoryAppLite(tk.Tk):
 1. QUELLVERZEICHNIS AUSWÄHLEN
    • Klicke auf "Durchsuchen" beim Quellverzeichnis
    • Wähle den Ordner mit deinen Dokumenten (z.B. OneDrive)
-   • Standard: ~/OneDrive - Marc König Unternehmensberatung
+   • Standard: ~/OneDrive - CompanyName
 
 2. AUSGABEVERZEICHNIS FESTLEGEN
    • Klicke auf "Durchsuchen" beim Ausgabeverzeichnis
@@ -932,7 +932,7 @@ KI-gestützte Dokumenten-Analyse mit DSGVO-Klassifizierung.
 Erstellt strukturierte JSON-Datenbanken für RAG-Systeme.
 
 ENTWICKELT VON
-Marc König Unternehmensberatung
+[Your Company Name]
 
 TECHNOLOGIE
 • Python 3.12+
@@ -947,7 +947,7 @@ Die CLI-Version ist Open Source verfügbar.
 GUI-Version: Proprietär
 
 LIZENZ
-Proprietär - Marc König Unternehmensberatung
+Proprietär - [Your Company Name]
 © 2025 Alle Rechte vorbehalten
 
 SUPPORT

@@ -269,7 +269,7 @@ python3 FileInventoryGUI.py
 
 ### Konfiguration übernehmen
 Die GUI liest automatisch die gleichen Standardpfade:
-- `SRC_ROOT`: ~/OneDrive - Marc König Unternehmensberatung
+- `SRC_ROOT`: ~/OneDrive - CompanyName
 - `DST_ROOT`: ~/LLM
 
 Änderungen über GUI → Durchsuchen-Button
@@ -331,7 +331,7 @@ A: Ja, aber LLM-Features benötigen LM Studio.
 
 ## 📄 Lizenz
 
-Proprietär - Marc König Unternehmensberatung
+Proprietär - [Your Company Name]
 
 ---
 

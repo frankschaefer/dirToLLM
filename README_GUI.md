@@ -136,7 +136,7 @@ Main Thread (UI)
 │     Version 1.19.0 - KI-gestützte Analyse      │
 ├─────────────────────────────────────────────────┤
 │ Quellverzeichnis:                               │
-│ [~/OneDrive - Marc König...]  [Durchsuchen]    │
+│ [~/OneDrive - CompanyName...]  [Durchsuchen]   │
 │                                                 │
 │ Ausgabeverzeichnis:                             │
 │ [~/LLM]                        [Durchsuchen]    │

@@ -25,7 +25,7 @@ SCRIPT_NAME = "FileInventory - OneDrive Dokumenten-Zusammenfassung (macOS)"
 ERROR_HANDLING_MODE = None
 
 # macOS Pfade - expandiere ~ zum Home-Verzeichnis
-SRC_ROOT = os.path.expanduser("~/OneDrive - Marc König Unternehmensberatung")
+SRC_ROOT = os.path.expanduser("~/OneDrive - CompanyName")
 DST_ROOT = os.path.expanduser("~/LLM")
 
 LMSTUDIO_API_URL = "http://localhost:1234/v1/chat/completions"
@@ -2910,7 +2910,7 @@ Beispiele:
 
 Konfiguration:
   Die Standardwerte können in der Datei direkt angepasst werden:
-    SRC_ROOT = "~/OneDrive - Marc König Unternehmensberatung"
+    SRC_ROOT = "~/OneDrive - CompanyName"
     DST_ROOT = "~/LLM"
     MAX_CONTEXT_TOKENS = 262144
 
