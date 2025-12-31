@@ -46,6 +46,7 @@ class FileInventoryAppLite(tk.Tk):
         # Queue für Thread-Kommunikation
         self.message_queue = queue.Queue()
         self.processing = False
+        self.paused = False
 
         # Pfade
         self.src_path = tk.StringVar(value=SRC_ROOT)
@@ -271,6 +272,14 @@ class FileInventoryAppLite(tk.Tk):
         )
         self.start_button.pack(side="left", padx=(0, 10))
 
+        self.pause_button = ttk.Button(
+            button_frame,
+            text="⏸ Pause",
+            command=self._toggle_pause,
+            state="disabled"
+        )
+        self.pause_button.pack(side="left", padx=(0, 10))
+
         self.stop_button = ttk.Button(
             button_frame,
             text="■ Stoppen",
@@ -391,7 +400,9 @@ class FileInventoryAppLite(tk.Tk):
             return
 
         self.processing = True
+        self.paused = False
         self.start_button.config(state="disabled")
+        self.pause_button.config(state="normal")
         self.stop_button.config(state="normal")
         self.progress_var.set(0)
 
@@ -410,9 +421,23 @@ class FileInventoryAppLite(tk.Tk):
         worker = threading.Thread(target=self._processing_worker, daemon=True)
         worker.start()
 
+    def _toggle_pause(self):
+        """Pausiert oder setzt die Verarbeitung fort"""
+        if self.paused:
+            # Fortsetzen
+            self.paused = False
+            self.pause_button.config(text="⏸ Pause")
+            self._log("Verarbeitung wird fortgesetzt...")
+        else:
+            # Pausieren
+            self.paused = True
+            self.pause_button.config(text="▶ Fortsetzen")
+            self._log("Verarbeitung wird nach aktueller Datei pausiert...")
+
     def _stop_processing(self):
         """Stoppt die Verarbeitung"""
         self.processing = False
+        self.paused = False
         self._log("Verarbeitung wird gestoppt...")
 
     def _processing_worker(self):
@@ -466,6 +491,16 @@ class FileInventoryAppLite(tk.Tk):
 
             # Verarbeite alle Dateien
             for idx, file_path in enumerate(all_files, 1):
+                if not self.processing:
+                    self.message_queue.put(("log", "Verarbeitung abgebrochen"))
+                    break
+
+                # Warte während Pause
+                while self.paused and self.processing:
+                    import time
+                    time.sleep(0.1)
+
+                # Prüfe erneut ob gestoppt wurde während Pause
                 if not self.processing:
                     self.message_queue.put(("log", "Verarbeitung abgebrochen"))
                     break
@@ -540,7 +575,9 @@ class FileInventoryAppLite(tk.Tk):
     def _processing_complete(self):
         """Verarbeitung abgeschlossen"""
         self.processing = False
+        self.paused = False
         self.start_button.config(state="normal")
+        self.pause_button.config(state="disabled", text="⏸ Pause")
         self.stop_button.config(state="disabled")
         self.progress_var.set(100)
 
@@ -932,7 +969,7 @@ KI-gestützte Dokumenten-Analyse mit DSGVO-Klassifizierung.
 Erstellt strukturierte JSON-Datenbanken für RAG-Systeme.
 
 ENTWICKELT VON
-[Your Company Name]
+Frank Schäfer
 
 TECHNOLOGIE
 • Python 3.12+
@@ -947,7 +984,7 @@ Die CLI-Version ist Open Source verfügbar.
 GUI-Version: Proprietär
 
 LIZENZ
-Proprietär - [Your Company Name]
+Proprietär - Frank Schäfer
 © 2025 Alle Rechte vorbehalten
 
 SUPPORT

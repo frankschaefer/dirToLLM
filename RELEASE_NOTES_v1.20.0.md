@@ -331,7 +331,7 @@ A: Ja, aber LLM-Features benötigen LM Studio.
 
 ## 📄 Lizenz
 
-Proprietär - [Your Company Name]
+Proprietär - Frank Schäfer
 
 ---
 

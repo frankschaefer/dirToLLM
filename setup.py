@@ -31,7 +31,7 @@ OPTIONS = {
         'CFBundleIdentifier': 'com.marckonig.fileinventory',
         'CFBundleVersion': VERSION,
         'CFBundleShortVersionString': VERSION,
-        'NSHumanReadableCopyright': '© 2025 [Your Company Name]',
+        'NSHumanReadableCopyright': '© 2025 Frank Schäfer',
         'NSHighResolutionCapable': True,
         'LSMinimumSystemVersion': '10.13.0',  # High Sierra+
         'NSRequiresAquaSystemAppearance': False,  # Dark Mode Support
@@ -69,5 +69,5 @@ setup(
     setup_requires=['py2app'],
     version=VERSION,
     description='KI-gestützte Dokumenten-Analyse mit DSGVO-Klassifizierung',
-    author='[Your Company Name]',
+    author='Frank Schäfer',
 )
