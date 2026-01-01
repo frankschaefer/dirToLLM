@@ -13,8 +13,28 @@ import sys
 import warnings
 import argparse
 
+# Optionale PDF-Bibliotheken für XFA/JavaScript-PDFs
+try:
+    import fitz  # PyMuPDF
+    PYMUPDF_AVAILABLE = True
+except ImportError:
+    PYMUPDF_AVAILABLE = False
+
+try:
+    import pikepdf
+    from lxml import etree
+    PIKEPDF_AVAILABLE = True
+except ImportError:
+    PIKEPDF_AVAILABLE = False
+
 # Unterdrücke openpyxl Warnungen für nicht unterstützte Excel-Features
 warnings.filterwarnings('ignore', category=UserWarning, module='openpyxl')
+
+# Unterdrücke PDF-Parsing Warnungen (FontBBox, Pattern-Farben etc.)
+# Diese treten bei fehlerhaften/nicht-standardkonformen PDFs auf, beeinträchtigen aber nicht die Textextraktion
+import logging
+logging.getLogger('pdfminer').setLevel(logging.ERROR)
+logging.getLogger('pdfplumber').setLevel(logging.ERROR)
 
 # Version und Metadaten
 VERSION = "1.18.0"
@@ -165,10 +185,128 @@ try:
 except ImportError:
     pass  # OCR nicht verfügbar
 
+def is_xfa_pdf(text, path=None):
+    """
+    Prüft ob ein PDF XFA/JavaScript enthält basierend auf:
+    1. Typischen Platzhaltertexten
+    2. PDF-Struktur (falls pikepdf verfügbar)
+
+    Args:
+        text: Extrahierter Text aus dem PDF
+        path: Optionaler Pfad zum PDF für Strukturprüfung
+
+    Returns:
+        bool: True wenn XFA-PDF erkannt wurde
+    """
+    # Prüfe auf typische XFA-Platzhaltertexte
+    xfa_indicators = [
+        "please wait",
+        "if this message is not eventually replaced",
+        "loading",
+        "please wait while the document is being prepared",
+        "if you are reading this text",
+        "javascript required"
+    ]
+
+    text_lower = text.lower()
+    for indicator in xfa_indicators:
+        if indicator in text_lower and len(text.strip()) < 1000:
+            return True
+
+    # Zusätzlich: Prüfe PDF-Struktur mit pikepdf
+    if PIKEPDF_AVAILABLE and path:
+        try:
+            with pikepdf.open(path) as pdf:
+                # Prüfe ob XFA-Namespace vorhanden
+                if '/AcroForm' in pdf.Root:
+                    acroform = pdf.Root.AcroForm
+                    if '/XFA' in acroform:
+                        return True
+        except Exception:
+            pass
+
+    return False
+
+def extract_text_pymupdf(path):
+    """
+    Extrahiert Text mit PyMuPDF (fitz) - Alternative zu pdfplumber.
+    Funktioniert oft besser mit komplexen PDFs.
+
+    Returns:
+        str: Extrahierter Text
+    """
+    if not PYMUPDF_AVAILABLE:
+        return None
+
+    try:
+        doc = fitz.open(path)
+        texts = []
+        for page in doc:
+            texts.append(page.get_text())
+        doc.close()
+        return "\n\n".join(texts)
+    except Exception as e:
+        print(f"  → PyMuPDF-Fehler: {e}")
+        return None
+
+def extract_xfa_xml(path):
+    """
+    Extrahiert XFA-Daten als XML aus einem PDF.
+
+    Returns:
+        str: Extrahierter Text aus XFA-XML oder None
+    """
+    if not PIKEPDF_AVAILABLE:
+        return None
+
+    try:
+        with pikepdf.open(path) as pdf:
+            if '/AcroForm' not in pdf.Root:
+                return None
+
+            acroform = pdf.Root.AcroForm
+            if '/XFA' not in acroform:
+                return None
+
+            xfa = acroform.XFA
+
+            # XFA kann ein Array oder Stream sein
+            xml_data = []
+            if isinstance(xfa, list):
+                # Array-Format: [tag, stream, tag, stream, ...]
+                for i in range(1, len(xfa), 2):
+                    if hasattr(xfa[i], 'read_bytes'):
+                        xml_data.append(xfa[i].read_bytes())
+            elif hasattr(xfa, 'read_bytes'):
+                # Single stream
+                xml_data.append(xfa.read_bytes())
+
+            if not xml_data:
+                return None
+
+            # Parse XML und extrahiere Text
+            texts = []
+            for xml_bytes in xml_data:
+                try:
+                    root = etree.fromstring(xml_bytes)
+                    # Extrahiere alle Textelemente
+                    for elem in root.iter():
+                        if elem.text and elem.text.strip():
+                            texts.append(elem.text.strip())
+                except Exception:
+                    pass
+
+            return "\n".join(texts) if texts else None
+
+    except Exception as e:
+        print(f"  → XFA-Extraktion Fehler: {e}")
+        return None
+
 def extract_text_pdf(path):
     """
     Extrahiert Text aus PDF-Dateien.
-    Verwendet OCR (Tesseract) für gescannte PDFs ohne Text.
+    - Verwendet OCR (Tesseract) für gescannte PDFs ohne Text
+    - Erkennt XFA/JavaScript-PDFs und nutzt alternative Extraktionsmethoden
 
     Returns:
         tuple: (text, ocr_info) wobei ocr_info ein dict ist mit:
@@ -176,6 +314,8 @@ def extract_text_pdf(path):
             - 'ocr_pages': Anzahl der Seiten mit OCR
             - 'total_pages': Gesamtzahl der Seiten
             - 'ocr_chars': Anzahl der via OCR extrahierten Zeichen
+            - 'xfa_detected': Boolean, ob XFA/JavaScript-PDF erkannt wurde
+            - 'extraction_method': Methode die erfolgreich war
     """
     texts = []
     ocr_pages = 0
@@ -184,7 +324,9 @@ def extract_text_pdf(path):
         'used_ocr': False,
         'ocr_pages': 0,
         'total_pages': 0,
-        'ocr_chars': 0
+        'ocr_chars': 0,
+        'xfa_detected': False,
+        'extraction_method': 'pdfplumber'
     }
 
     try:
@@ -245,12 +387,55 @@ def extract_text_pdf(path):
     if ocr_info['used_ocr'] and len(result.strip()) > 100:
         print(f"  → OCR Ergebnis: {ocr_pages}/{total_pages} Seiten mit OCR verarbeitet, {total_ocr_chars:,} Zeichen extrahiert")
 
+    # Prüfe ob XFA/JavaScript-PDF
+    if is_xfa_pdf(result, path):
+        ocr_info['xfa_detected'] = True
+        print(f"  → XFA/JavaScript-PDF erkannt, versuche alternative Extraktionsmethoden...")
+
+        # Methode 1: Versuche PyMuPDF
+        if PYMUPDF_AVAILABLE:
+            print(f"  → Versuche PyMuPDF...")
+            pymupdf_text = extract_text_pymupdf(path)
+            if pymupdf_text and len(pymupdf_text.strip()) > len(result.strip()):
+                result = pymupdf_text
+                ocr_info['extraction_method'] = 'pymupdf'
+                print(f"  → PyMuPDF erfolgreich: {len(result)} Zeichen extrahiert")
+                return result, ocr_info
+
+        # Methode 2: Versuche XFA-XML-Extraktion
+        if PIKEPDF_AVAILABLE:
+            print(f"  → Versuche XFA-XML-Extraktion...")
+            xfa_text = extract_xfa_xml(path)
+            if xfa_text and len(xfa_text.strip()) > len(result.strip()):
+                result = xfa_text
+                ocr_info['extraction_method'] = 'xfa_xml'
+                print(f"  → XFA-XML erfolgreich: {len(result)} Zeichen extrahiert")
+                return result, ocr_info
+
+        # Wenn keine Methode erfolgreich war, markiere als Fehler
+        if len(result.strip()) < 100:
+            print(f"  ⚠️  WARNUNG: XFA-PDF konnte nicht vollständig extrahiert werden!")
+            print(f"  → Bitte manuell mit Adobe Acrobat öffnen und als Standard-PDF exportieren")
+
     return result, ocr_info
 
 def extract_text_docx(path):
-    """Extrahiert Text aus Word-Dokumenten (.docx)."""
-    doc = docx.Document(path)
-    return "\n".join(p.text for p in doc.paragraphs)
+    """
+    Extrahiert Text aus Word-Dokumenten (.docx).
+    Falls die Datei kein gültiges .docx-Format ist, wird automatisch
+    auf .doc-Extraktion zurückgegriffen.
+    """
+    try:
+        doc = docx.Document(path)
+        return "\n".join(p.text for p in doc.paragraphs)
+    except Exception as e:
+        # Wenn die Datei kein gültiges ZIP/DOCX ist, versuche .doc-Extraktion
+        if "not a zip file" in str(e).lower() or "badzipfile" in str(e.__class__.__name__.lower()):
+            print(f"  → Datei {path.name} ist kein gültiges .docx-Format, versuche .doc-Extraktion")
+            return extract_text_doc(path)
+        else:
+            # Für andere Fehler, propagiere die Exception
+            raise
 
 def extract_text_doc(path):
     """
@@ -1768,6 +1953,17 @@ def process_file(src_file):
     # Füge OCR-Info hinzu falls verfügbar
     if ocr_info and ocr_info.get('used_ocr'):
         metadata['ocr_info'] = ocr_info
+
+    # Füge XFA-Warnung hinzu falls erkannt
+    if ocr_info and ocr_info.get('xfa_detected'):
+        metadata['warnings'] = metadata.get('warnings', [])
+        xfa_warning = {
+            'type': 'xfa_pdf',
+            'message': 'XFA/JavaScript-PDF erkannt - Textextraktion möglicherweise unvollständig',
+            'extraction_method': ocr_info.get('extraction_method', 'pdfplumber'),
+            'recommendation': 'Bitte manuell mit Adobe Acrobat öffnen und als Standard-PDF exportieren für vollständige Extraktion'
+        }
+        metadata['warnings'].append(xfa_warning)
 
     with open(dst_file, "w", encoding="utf-8") as f:
         json.dump(metadata, f, ensure_ascii=False, indent=2)

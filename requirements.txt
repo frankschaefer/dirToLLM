@@ -16,7 +16,9 @@ packaging==25.0
 pandas==2.3.3
 pdfminer.six==20231228
 pdfplumber==0.11.4
+pikepdf==9.4.2
 pillow==12.0.0
+PyMuPDF==1.24.14
 pycparser==2.23
 pyparsing==3.3.1
 pypdfium2==5.2.0
