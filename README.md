@@ -1,8 +1,9 @@
-# FileInventory - OneDrive Dokumenten-Zusammenfassung (macOS)
+# FileInventory - OneDrive Dokumenten-Zusammenfassung
 
-**Version:** 1.18.0
-**Datum:** 2025-12-30
+**Version:** 1.19.0
+**Datum:** 2026-01-04
 **Lizenz:** Proprietär
+**Plattformen:** Windows 11, macOS 15+ (Sequoia), Linux
 
 ## Übersicht
 
@@ -16,7 +17,7 @@ FileInventory ist ein intelligentes Python-Tool zur automatischen Analyse und Zu
 - **Named Entity Recognition**: Automatische Extraktion von Firmen, Personen, Institutionen und Organisationen
 - **DSGVO-Klassifizierung**: Automatische Erkennung besonders schutzbedürftiger personenbezogener Daten gemäß Art. 9 DSGVO und § 26 BDSG (NEU in v1.18.0)
 - **Kombinierte Datenbank**: Erstellt durchsuchbare JSON-Datenbanken für ChatGPT/Claude
-- **macOS-optimiert**: Native macOS-Unterstützung mit OneDrive-Integration
+- **Cross-Platform**: Volle Unterstützung für Windows 11, macOS 15+ und Linux mit automatischer Plattformerkennung
 - **LLM-basierte Analyse**: Intelligente Zusammenfassungen mit RAG-optimierten, dateityp-spezifischen Prompts
 - **Vision-Fähigkeit**: Bildanalyse und -beschreibung mittels multimodaler Modelle
 - **Icon-Filter**: Automatisches Überspringen kleiner Bilder (<10 KB)
@@ -31,18 +32,33 @@ FileInventory ist ein intelligentes Python-Tool zur automatischen Analyse und Zu
 ## Systemanforderungen
 
 ### Betriebssystem
-- **macOS**: Version 10.15 (Catalina) oder höher
-- Getestet auf macOS 26.2
+- **Windows**: Windows 11 (empfohlen), Windows 10 mit UTF-8 Support
+- **macOS**: Version 15+ (Sequoia), ältere Versionen ab 10.15 (Catalina) kompatibel
+- **Linux**: Ubuntu 20.04+, Debian 11+, Fedora 35+
+- Automatische Plattformerkennung und -konfiguration
 
 ### Software
 - **Python**: Version 3.8 oder höher (Python 3.12+ empfohlen)
 - **LM Studio**: Aktuelle Version mit laufendem lokalem Server
-- **OneDrive**: OneDrive App für macOS installiert und synchronisiert
+- **OneDrive**: OneDrive App installiert und synchronisiert (optional, automatisch erkannt)
 
 ### Hardware-Empfehlungen
 - **RAM**: Mindestens 8 GB (16 GB empfohlen)
 - **GPU**: Optional, beschleunigt LLM-Inferenz erheblich (Apple Silicon bevorzugt)
 - **Festplatte**: Ausreichend Speicherplatz für JSON-Ausgaben
+
+---
+
+## Plattform-Unterstützung
+
+FileInventory unterstützt Windows 11, macOS 15+ und Linux mit automatischer Plattformerkennung.
+
+📖 **Detaillierte Plattform-Informationen:** Siehe [PLATFORM_SUPPORT.md](PLATFORM_SUPPORT.md)
+
+- Automatische OneDrive-Pfad-Erkennung
+- Plattformspezifische Tastatureingabe
+- Platform-optimierte Tesseract OCR Installation
+- Angepasste Standard-Verzeichnisse
 
 ---
 
@@ -126,18 +142,26 @@ pip install -r requirements.txt
 4. Starten Sie den Server auf Port **1234** (Standard)
 5. Notieren Sie den "Model Name" (wird in `FileInventory.py` benötigt)
 
-#### Konfiguration im Skript
-Öffnen Sie `FileInventory.py` und passen Sie bei Bedarf an:
+#### Konfiguration
+
+Die Plattform-Konfiguration erfolgt automatisch über `platform_config.py`:
+
+- **Windows**: OneDrive wird aus Umgebungsvariablen erkannt
+- **macOS**: Neue CloudStorage-Struktur wird automatisch erkannt
+- **Linux**: Standard-Dokumentenordner
+
+Manuelle Anpassungen sind in `platform_config.py` möglich.
+
+**LM Studio Konfiguration** in `FileInventory.py`:
 
 ```python
 LMSTUDIO_API_URL = "http://localhost:1234/v1/chat/completions"
 MODEL_NAME = "local-model"  # Ersetzen Sie mit dem Namen aus LM Studio
 
 # Modell Context-Länge (maximale Anzahl Tokens)
-# Passen Sie dies an Ihr Modell an:
 # - Kleinere Modelle (z.B. Llama 3 8B): 8192
 # - Größere Modelle (z.B. Qwen 2.5 14B): 32768
-# - Reasoning-Modelle (z.B. mistralai/ministral-3-14b-reasoning): 262144
+# - Reasoning-Modelle (z.B. ministral-3-14b-reasoning): 262144
 MAX_CONTEXT_TOKENS = 262144
 ```
 
