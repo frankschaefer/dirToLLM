@@ -438,8 +438,8 @@ def extract_text_docx(path):
             from lxml import etree
 
             # Monkey-patch die parse_xml Funktion in docx.oxml
-            import docx.oxml
-            original_parse_xml = docx.oxml.parse_xml
+            from docx import oxml as docx_oxml
+            original_parse_xml = docx_oxml.parse_xml
 
             def parse_xml_huge(xml_str):
                 """Parser mit huge_tree=True für große XML-Dateien"""
@@ -449,14 +449,14 @@ def extract_text_docx(path):
                 else:
                     return etree.fromstring(xml_str.encode('utf-8'), huge_parser)
 
-            docx.oxml.parse_xml = parse_xml_huge
+            docx_oxml.parse_xml = parse_xml_huge
 
             try:
                 doc = docx.Document(path)
                 return "\n".join(p.text for p in doc.paragraphs)
             finally:
                 # Stelle die Original-Parser-Funktion wieder her
-                docx.oxml.parse_xml = original_parse_xml
+                docx_oxml.parse_xml = original_parse_xml
         else:
             doc = docx.Document(path)
             return "\n".join(p.text for p in doc.paragraphs)
@@ -514,8 +514,8 @@ def extract_text_pptx(path):
             from lxml import etree
 
             # Monkey-patch die parse_xml Funktion in pptx.oxml
-            import pptx.oxml
-            original_parse_xml = pptx.oxml.parse_xml
+            from pptx import oxml as pptx_oxml
+            original_parse_xml = pptx_oxml.parse_xml
 
             def parse_xml_huge(xml_str):
                 """Parser mit huge_tree=True für große XML-Dateien"""
@@ -525,7 +525,7 @@ def extract_text_pptx(path):
                 else:
                     return etree.fromstring(xml_str.encode('utf-8'), huge_parser)
 
-            pptx.oxml.parse_xml = parse_xml_huge
+            pptx_oxml.parse_xml = parse_xml_huge
 
             try:
                 prs = Presentation(path)
@@ -539,7 +539,7 @@ def extract_text_pptx(path):
                 return "\n\n".join(texts)
             finally:
                 # Stelle die Original-Parser-Funktion wieder her
-                pptx.oxml.parse_xml = original_parse_xml
+                pptx_oxml.parse_xml = original_parse_xml
         else:
             prs = Presentation(path)
             for slide_num, slide in enumerate(prs.slides, 1):
@@ -601,8 +601,8 @@ def extract_text_xlsx(path):
             from lxml import etree
 
             # Monkey-patch die fromstring Funktion in openpyxl
-            import openpyxl.xml.functions
-            original_fromstring = openpyxl.xml.functions.fromstring
+            from openpyxl.xml import functions as openpyxl_xml_functions
+            original_fromstring = openpyxl_xml_functions.fromstring
 
             def fromstring_huge(xml_str):
                 """Parser mit huge_tree=True für große XML-Dateien"""
@@ -612,7 +612,7 @@ def extract_text_xlsx(path):
                 else:
                     return etree.fromstring(xml_str.encode('utf-8'), huge_parser)
 
-            openpyxl.xml.functions.fromstring = fromstring_huge
+            openpyxl_xml_functions.fromstring = fromstring_huge
 
             try:
                 wb = load_workbook(path, data_only=True)  # data_only=True gibt Werte statt Formeln
@@ -633,7 +633,7 @@ def extract_text_xlsx(path):
                 return "\n\n".join(texts)
             finally:
                 # Stelle die Original-fromstring-Funktion wieder her
-                openpyxl.xml.functions.fromstring = original_fromstring
+                openpyxl_xml_functions.fromstring = original_fromstring
         else:
             wb = load_workbook(path, data_only=True)  # data_only=True gibt Werte statt Formeln
             for sheet_name in wb.sheetnames:
