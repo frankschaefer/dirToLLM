@@ -426,13 +426,48 @@ def extract_text_docx(path):
     auf .doc-Extraktion zurückgegriffen.
     """
     try:
-        doc = docx.Document(path)
-        return "\n".join(p.text for p in doc.paragraphs)
+        # Debug: Dateigröße ausgeben
+        file_size = os.path.getsize(path)
+        if file_size > 5 * 1024 * 1024:  # > 5 MB
+            print(f"  → Verarbeite große DOCX-Datei: {path.name} ({file_size / (1024*1024):.1f} MB)")
+
+        # Für große DOCX-Dateien: XML_PARSE_HUGE aktivieren
+        # Dies umgeht das Buffer-Limit von lxml
+        if file_size > 1 * 1024 * 1024:  # > 1 MB
+            from lxml import etree
+            # Setze XML_PARSE_HUGE für große Dateien
+            huge_parser = etree.XMLParser(huge_tree=True)
+
+            # Monkey-patch den docx-Parser temporär
+            from docx.oxml import parser as docx_parser
+            original_parser = docx_parser.oxml_parser
+            docx_parser.oxml_parser = huge_parser
+
+            try:
+                doc = docx.Document(path)
+                return "\n".join(p.text for p in doc.paragraphs)
+            finally:
+                # Stelle den Original-Parser wieder her
+                docx_parser.oxml_parser = original_parser
+        else:
+            doc = docx.Document(path)
+            return "\n".join(p.text for p in doc.paragraphs)
+
     except Exception as e:
+        # Dateigröße für Fehlermeldung
+        try:
+            file_size = os.path.getsize(path)
+        except:
+            file_size = 0
+
         # Wenn die Datei kein gültiges ZIP/DOCX ist, versuche .doc-Extraktion
         if "not a zip file" in str(e).lower() or "badzipfile" in str(e.__class__.__name__.lower()):
             print(f"  → Datei {path.name} ist kein gültiges .docx-Format, versuche .doc-Extraktion")
             return extract_text_doc(path)
+        elif "resource limit exceeded" in str(e).lower() or "xml_parse_huge" in str(e).lower():
+            print(f"  ⚠ Datei {path.name} ist zu groß für XML-Parser ({file_size / (1024*1024):.1f} MB)")
+            print(f"  → Überspringe diese Datei")
+            return ""  # Leeren String zurückgeben statt Fehler
         else:
             # Für andere Fehler, propagiere die Exception
             raise
@@ -455,18 +490,61 @@ def extract_text_pptx(path):
     """Extrahiert Text aus PowerPoint-Dateien (.pptx)."""
     texts = []
     try:
-        prs = Presentation(path)
-        for slide_num, slide in enumerate(prs.slides, 1):
-            slide_texts = []
-            for shape in slide.shapes:
-                if hasattr(shape, "text") and shape.text.strip():
-                    slide_texts.append(shape.text)
-            if slide_texts:
-                texts.append(f"Folie {slide_num}:\n" + "\n".join(slide_texts))
-        return "\n\n".join(texts)
+        # Debug: Dateigröße ausgeben
+        file_size = os.path.getsize(path)
+        if file_size > 5 * 1024 * 1024:  # > 5 MB
+            print(f"  → Verarbeite große PPTX-Datei: {path.name} ({file_size / (1024*1024):.1f} MB)")
+
+        # Für große PPTX-Dateien: XML_PARSE_HUGE aktivieren
+        if file_size > 1 * 1024 * 1024:  # > 1 MB
+            from lxml import etree
+            huge_parser = etree.XMLParser(huge_tree=True)
+
+            # Monkey-patch für pptx-Parser
+            import pptx.oxml
+            if hasattr(pptx.oxml, 'xmlchemy') and hasattr(pptx.oxml.xmlchemy, 'parse_xml'):
+                original_parse_xml = pptx.oxml.xmlchemy.parse_xml
+                def patched_parse_xml(xml):
+                    return etree.fromstring(xml, huge_parser)
+                pptx.oxml.xmlchemy.parse_xml = patched_parse_xml
+
+            try:
+                prs = Presentation(path)
+                for slide_num, slide in enumerate(prs.slides, 1):
+                    slide_texts = []
+                    for shape in slide.shapes:
+                        if hasattr(shape, "text") and shape.text.strip():
+                            slide_texts.append(shape.text)
+                    if slide_texts:
+                        texts.append(f"Folie {slide_num}:\n" + "\n".join(slide_texts))
+                return "\n\n".join(texts)
+            finally:
+                # Stelle Original-Parser wieder her
+                if 'original_parse_xml' in locals():
+                    pptx.oxml.xmlchemy.parse_xml = original_parse_xml
+        else:
+            prs = Presentation(path)
+            for slide_num, slide in enumerate(prs.slides, 1):
+                slide_texts = []
+                for shape in slide.shapes:
+                    if hasattr(shape, "text") and shape.text.strip():
+                        slide_texts.append(shape.text)
+                if slide_texts:
+                    texts.append(f"Folie {slide_num}:\n" + "\n".join(slide_texts))
+            return "\n\n".join(texts)
     except Exception as e:
-        print(f"Warnung bei PPTX-Extraktion: {e}")
-        return ""
+        error_str = str(e).lower()
+        if "resource limit exceeded" in error_str or "xml_parse_huge" in error_str:
+            try:
+                file_size = os.path.getsize(path)
+                print(f"  ⚠ Datei {path.name} ist zu groß für XML-Parser ({file_size / (1024*1024):.1f} MB)")
+            except:
+                print(f"  ⚠ Datei {path.name} ist zu groß für XML-Parser")
+            print(f"  → Überspringe diese Datei")
+            return ""
+        else:
+            print(f"Warnung bei PPTX-Extraktion: {e}")
+            return ""
 
 def extract_text_ppt(path):
     """
@@ -494,25 +572,75 @@ def extract_text_xlsx(path):
     """Extrahiert Text (keine Formeln) aus Excel-Dateien (.xlsx, .xlsm, .xltx)."""
     texts = []
     try:
-        wb = load_workbook(path, data_only=True)  # data_only=True gibt Werte statt Formeln
-        for sheet_name in wb.sheetnames:
-            sheet = wb[sheet_name]
-            sheet_texts = []
+        # Debug: Dateigröße ausgeben
+        file_size = os.path.getsize(path)
+        if file_size > 5 * 1024 * 1024:  # > 5 MB
+            print(f"  → Verarbeite große Excel-Datei: {path.name} ({file_size / (1024*1024):.1f} MB)")
 
-            for row in sheet.iter_rows(values_only=True):
-                # Filtere None-Werte und konvertiere zu String
-                row_texts = [str(cell).strip() for cell in row if cell is not None and str(cell).strip()]
-                if row_texts:
-                    sheet_texts.append(" | ".join(row_texts))
+        # Für große Excel-Dateien: XML_PARSE_HUGE aktivieren
+        if file_size > 1 * 1024 * 1024:  # > 1 MB
+            from lxml import etree
+            huge_parser = etree.XMLParser(huge_tree=True)
 
-            if sheet_texts:
-                texts.append(f"Arbeitsblatt '{sheet_name}':\n" + "\n".join(sheet_texts))
+            # Monkey-patch für openpyxl-Parser
+            import openpyxl.xml.functions
+            if hasattr(openpyxl.xml.functions, 'fromstring'):
+                original_fromstring = openpyxl.xml.functions.fromstring
+                def patched_fromstring(xml):
+                    return etree.fromstring(xml, huge_parser)
+                openpyxl.xml.functions.fromstring = patched_fromstring
 
-        wb.close()
-        return "\n\n".join(texts)
+            try:
+                wb = load_workbook(path, data_only=True)  # data_only=True gibt Werte statt Formeln
+                for sheet_name in wb.sheetnames:
+                    sheet = wb[sheet_name]
+                    sheet_texts = []
+
+                    for row in sheet.iter_rows(values_only=True):
+                        # Filtere None-Werte und konvertiere zu String
+                        row_texts = [str(cell).strip() for cell in row if cell is not None and str(cell).strip()]
+                        if row_texts:
+                            sheet_texts.append(" | ".join(row_texts))
+
+                    if sheet_texts:
+                        texts.append(f"Arbeitsblatt '{sheet_name}':\n" + "\n".join(sheet_texts))
+
+                wb.close()
+                return "\n\n".join(texts)
+            finally:
+                # Stelle Original-Parser wieder her
+                if 'original_fromstring' in locals():
+                    openpyxl.xml.functions.fromstring = original_fromstring
+        else:
+            wb = load_workbook(path, data_only=True)  # data_only=True gibt Werte statt Formeln
+            for sheet_name in wb.sheetnames:
+                sheet = wb[sheet_name]
+                sheet_texts = []
+
+                for row in sheet.iter_rows(values_only=True):
+                    # Filtere None-Werte und konvertiere zu String
+                    row_texts = [str(cell).strip() for cell in row if cell is not None and str(cell).strip()]
+                    if row_texts:
+                        sheet_texts.append(" | ".join(row_texts))
+
+                if sheet_texts:
+                    texts.append(f"Arbeitsblatt '{sheet_name}':\n" + "\n".join(sheet_texts))
+
+            wb.close()
+            return "\n\n".join(texts)
     except Exception as e:
-        print(f"Warnung bei Excel-Extraktion: {e}")
-        return ""
+        error_str = str(e).lower()
+        if "resource limit exceeded" in error_str or "xml_parse_huge" in error_str:
+            try:
+                file_size = os.path.getsize(path)
+                print(f"  ⚠ Datei {path.name} ist zu groß für XML-Parser ({file_size / (1024*1024):.1f} MB)")
+            except:
+                print(f"  ⚠ Datei {path.name} ist zu groß für XML-Parser")
+            print(f"  → Überspringe diese Datei")
+            return ""
+        else:
+            print(f"Warnung bei Excel-Extraktion: {e}")
+            return ""
 
 def extract_text_xls(path):
     """
