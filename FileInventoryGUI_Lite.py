@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-FileInventory GUI Lite - Kompatible Version für ältere macOS-Versionen
-=======================================================================
+FileInventory GUI Lite - Plattformübergreifende Basis-Version
+==============================================================
 
-Verwendet Standard Tkinter statt CustomTkinter
-Kompatibel mit macOS 10.13+ (High Sierra)
+Verwendet Standard Tkinter (keine externen GUI-Abhängigkeiten)
+Kompatibel mit Windows 11, macOS 10.13+, und Linux
 """
 
 import tkinter as tk
@@ -15,6 +15,9 @@ import threading
 import queue
 from datetime import datetime
 from pathlib import Path
+
+# Importiere Plattform-Konfiguration
+from platform_config import PLATFORM
 
 # Importiere FileInventory-Funktionen
 from FileInventory import (

@@ -8,10 +8,16 @@ from openpyxl import load_workbook
 import time
 import json
 from datetime import datetime
-import select
 import sys
 import warnings
 import argparse
+
+# Plattform-spezifische Konfiguration
+from platform_config import PLATFORM, is_windows, is_macos, is_linux
+
+# Import select nur auf Unix-Systemen (macOS/Linux)
+if PLATFORM.supports_select:
+    import select
 
 # Optionale PDF-Bibliotheken für XFA/JavaScript-PDFs
 try:
@@ -37,16 +43,16 @@ logging.getLogger('pdfminer').setLevel(logging.ERROR)
 logging.getLogger('pdfplumber').setLevel(logging.ERROR)
 
 # Version und Metadaten
-VERSION = "1.18.0"
-VERSION_DATE = "2025-12-30"
-SCRIPT_NAME = "FileInventory - OneDrive Dokumenten-Zusammenfassung (macOS)"
+VERSION = "1.19.0"
+VERSION_DATE = "2026-01-04"
+SCRIPT_NAME = PLATFORM.get_script_name()  # Plattformspezifischer Name
 
 # Fehlerbehandlungsmodus: None = fragen, "skip" = weiter ohne Fragen, "ask" = weiter mit Fragen
 ERROR_HANDLING_MODE = None
 
-# macOS Pfade - expandiere ~ zum Home-Verzeichnis
-SRC_ROOT = os.path.expanduser("~/OneDrive - CompanyName")
-DST_ROOT = os.path.expanduser("~/LLM")
+# Plattformunabhängige Standard-Pfade
+SRC_ROOT = PLATFORM.default_src
+DST_ROOT = PLATFORM.default_dst
 
 LMSTUDIO_API_URL = "http://localhost:1234/v1/chat/completions"
 MODEL_NAME = "local-model"  # in LM Studio unter Model-Name des laufenden Servers schauen
@@ -762,7 +768,7 @@ def extract_text(path):
 def is_file_accessible(file_path):
     """
     Prüft, ob eine Datei zugänglich ist.
-    Auf macOS sind OneDrive-Dateien normalerweise direkt verfügbar.
+    OneDrive-Dateien sind normalerweise direkt verfügbar (Windows & macOS).
     """
     try:
         return os.path.exists(file_path) and os.access(file_path, os.R_OK)
@@ -1940,8 +1946,7 @@ def process_file(src_file):
             print("\nDiese Datei scheint gescannten Text zu enthalten und benötigt OCR.")
             print("OCR ist nicht verfügbar (pytesseract/Tesseract nicht installiert).")
             print("\nInstallation:")
-            print("  macOS:  brew install tesseract tesseract-lang")
-            print("  Linux:  sudo apt-get install tesseract-ocr tesseract-ocr-deu")
+            print(f"  {PLATFORM.platform_name}:  {PLATFORM.tesseract_install_cmd}")
             print("  Python: pip install pytesseract pillow")
             print("!" * 70)
         else:
@@ -2441,19 +2446,29 @@ def validate_json_file(json_path, src_file_path=None):
 
 def check_user_input():
     """
-    Prüft ob eine Taste gedrückt wurde (nicht-blockierend) - macOS Version.
+    Prüft ob eine Taste gedrückt wurde (nicht-blockierend).
+    Plattformunabhängige Implementierung für Windows, macOS und Linux.
     Returns True wenn eine Taste gedrückt wurde.
     """
     try:
-        # Verwende select() für nicht-blockierende Eingabe auf macOS/Unix
-        rlist, _, _ = select.select([sys.stdin], [], [], 0)
-        if rlist:
-            # Lese und verwerfe die Eingabe
-            sys.stdin.readline()
-            return True
-        return False
+        if is_windows():
+            # Windows verwendet msvcrt für nicht-blockierende Eingabe
+            import msvcrt
+            if msvcrt.kbhit():
+                # Lese und verwerfe die Eingabe
+                msvcrt.getch()
+                return True
+            return False
+        else:
+            # Unix-Systeme (macOS/Linux) verwenden select()
+            rlist, _, _ = select.select([sys.stdin], [], [], 0)
+            if rlist:
+                # Lese und verwerfe die Eingabe
+                sys.stdin.readline()
+                return True
+            return False
     except Exception:
-        # Falls select nicht funktioniert, gebe False zurück
+        # Falls die Eingabeprüfung nicht funktioniert, gebe False zurück
         return False
 
 def ask_continue():
@@ -2623,8 +2638,7 @@ def walk_and_process():
         print(f"⚠ OCR nicht verfügbar: {ocr_message}")
         print("  Hinweis: Gescannte PDFs werden übersprungen.")
         print("  Installation:")
-        print("    macOS:  brew install tesseract tesseract-lang")
-        print("    Linux:  sudo apt-get install tesseract-ocr tesseract-ocr-deu")
+        print(f"    {PLATFORM.platform_name}:  {PLATFORM.tesseract_install_cmd}")
         print("    Python: pip install pytesseract pillow")
 
     # Zähle zunächst alle zu verarbeitenden Dateien mit Fortschrittsanzeige
@@ -3256,10 +3270,12 @@ Beispiele:
     Zeigt Versionsinformation an
 
 Konfiguration:
-  Die Standardwerte können in der Datei direkt angepasst werden:
-    SRC_ROOT = "~/OneDrive - CompanyName"
-    DST_ROOT = "~/LLM"
-    MAX_CONTEXT_TOKENS = 262144
+  Die Standardwerte werden automatisch plattformspezifisch gesetzt.
+  Aktuelle Plattform: {PLATFORM.platform_name}
+    Standard Quellverzeichnis: {PLATFORM.default_src}
+    Standard Zielverzeichnis: {PLATFORM.default_dst}
+
+  Manuelle Anpassungen in platform_config.py möglich
 
 Empfohlene MAX_CONTEXT_TOKENS Werte:
   - Kleinere Modelle (z.B. Llama 3 8B): 8192

@@ -3,8 +3,8 @@
 FileInventory GUI - Moderne grafische Oberfläche
 ================================================
 
-Plattform: macOS (primär), Windows 11 (kompatibel)
-Framework: CustomTkinter für modernes Design
+Plattform: Windows 11, macOS 15+ (Sequoia), Linux
+Framework: CustomTkinter für modernes, plattformübergreifendes Design
 """
 
 import customtkinter as ctk
@@ -16,6 +16,9 @@ import threading
 import queue
 from datetime import datetime
 from pathlib import Path
+
+# Importiere Plattform-Konfiguration
+from platform_config import PLATFORM
 
 # Importiere FileInventory-Funktionen
 from FileInventory import (
