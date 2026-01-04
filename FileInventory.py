@@ -434,21 +434,29 @@ def extract_text_docx(path):
         # Für große DOCX-Dateien: XML_PARSE_HUGE aktivieren
         # Dies umgeht das Buffer-Limit von lxml
         if file_size > 1 * 1024 * 1024:  # > 1 MB
+            print(f"  → Aktiviere XML_PARSE_HUGE für große DOCX-Datei")
             from lxml import etree
-            # Setze XML_PARSE_HUGE für große Dateien
-            huge_parser = etree.XMLParser(huge_tree=True)
 
-            # Monkey-patch den docx-Parser temporär
-            from docx.oxml import parser as docx_parser
-            original_parser = docx_parser.oxml_parser
-            docx_parser.oxml_parser = huge_parser
+            # Monkey-patch die parse_xml Funktion in docx.oxml
+            import docx.oxml
+            original_parse_xml = docx.oxml.parse_xml
+
+            def parse_xml_huge(xml_str):
+                """Parser mit huge_tree=True für große XML-Dateien"""
+                huge_parser = etree.XMLParser(huge_tree=True, remove_blank_text=True)
+                if isinstance(xml_str, bytes):
+                    return etree.fromstring(xml_str, huge_parser)
+                else:
+                    return etree.fromstring(xml_str.encode('utf-8'), huge_parser)
+
+            docx.oxml.parse_xml = parse_xml_huge
 
             try:
                 doc = docx.Document(path)
                 return "\n".join(p.text for p in doc.paragraphs)
             finally:
-                # Stelle den Original-Parser wieder her
-                docx_parser.oxml_parser = original_parser
+                # Stelle die Original-Parser-Funktion wieder her
+                docx.oxml.parse_xml = original_parse_xml
         else:
             doc = docx.Document(path)
             return "\n".join(p.text for p in doc.paragraphs)
@@ -468,6 +476,11 @@ def extract_text_docx(path):
             print(f"  ⚠ Datei {path.name} ist zu groß für XML-Parser ({file_size / (1024*1024):.1f} MB)")
             print(f"  → Überspringe diese Datei")
             return ""  # Leeren String zurückgeben statt Fehler
+        elif "attributeerror" in str(e.__class__.__name__.lower()) and "body" in str(e).lower():
+            print(f"  ⚠ Fehler beim Parsen von {path.name}: Inkompatible XML-Struktur")
+            print(f"  → Debug: {e}")
+            print(f"  → Überspringe diese Datei")
+            return ""
         else:
             # Für andere Fehler, propagiere die Exception
             raise
@@ -497,16 +510,22 @@ def extract_text_pptx(path):
 
         # Für große PPTX-Dateien: XML_PARSE_HUGE aktivieren
         if file_size > 1 * 1024 * 1024:  # > 1 MB
+            print(f"  → Aktiviere XML_PARSE_HUGE für große PPTX-Datei")
             from lxml import etree
-            huge_parser = etree.XMLParser(huge_tree=True)
 
-            # Monkey-patch für pptx-Parser
+            # Monkey-patch die parse_xml Funktion in pptx.oxml
             import pptx.oxml
-            if hasattr(pptx.oxml, 'xmlchemy') and hasattr(pptx.oxml.xmlchemy, 'parse_xml'):
-                original_parse_xml = pptx.oxml.xmlchemy.parse_xml
-                def patched_parse_xml(xml):
-                    return etree.fromstring(xml, huge_parser)
-                pptx.oxml.xmlchemy.parse_xml = patched_parse_xml
+            original_parse_xml = pptx.oxml.parse_xml
+
+            def parse_xml_huge(xml_str):
+                """Parser mit huge_tree=True für große XML-Dateien"""
+                huge_parser = etree.XMLParser(huge_tree=True, remove_blank_text=True)
+                if isinstance(xml_str, bytes):
+                    return etree.fromstring(xml_str, huge_parser)
+                else:
+                    return etree.fromstring(xml_str.encode('utf-8'), huge_parser)
+
+            pptx.oxml.parse_xml = parse_xml_huge
 
             try:
                 prs = Presentation(path)
@@ -519,9 +538,8 @@ def extract_text_pptx(path):
                         texts.append(f"Folie {slide_num}:\n" + "\n".join(slide_texts))
                 return "\n\n".join(texts)
             finally:
-                # Stelle Original-Parser wieder her
-                if 'original_parse_xml' in locals():
-                    pptx.oxml.xmlchemy.parse_xml = original_parse_xml
+                # Stelle die Original-Parser-Funktion wieder her
+                pptx.oxml.parse_xml = original_parse_xml
         else:
             prs = Presentation(path)
             for slide_num, slide in enumerate(prs.slides, 1):
@@ -579,16 +597,22 @@ def extract_text_xlsx(path):
 
         # Für große Excel-Dateien: XML_PARSE_HUGE aktivieren
         if file_size > 1 * 1024 * 1024:  # > 1 MB
+            print(f"  → Aktiviere XML_PARSE_HUGE für große Excel-Datei")
             from lxml import etree
-            huge_parser = etree.XMLParser(huge_tree=True)
 
-            # Monkey-patch für openpyxl-Parser
+            # Monkey-patch die fromstring Funktion in openpyxl
             import openpyxl.xml.functions
-            if hasattr(openpyxl.xml.functions, 'fromstring'):
-                original_fromstring = openpyxl.xml.functions.fromstring
-                def patched_fromstring(xml):
-                    return etree.fromstring(xml, huge_parser)
-                openpyxl.xml.functions.fromstring = patched_fromstring
+            original_fromstring = openpyxl.xml.functions.fromstring
+
+            def fromstring_huge(xml_str):
+                """Parser mit huge_tree=True für große XML-Dateien"""
+                huge_parser = etree.XMLParser(huge_tree=True, remove_blank_text=True)
+                if isinstance(xml_str, bytes):
+                    return etree.fromstring(xml_str, huge_parser)
+                else:
+                    return etree.fromstring(xml_str.encode('utf-8'), huge_parser)
+
+            openpyxl.xml.functions.fromstring = fromstring_huge
 
             try:
                 wb = load_workbook(path, data_only=True)  # data_only=True gibt Werte statt Formeln
@@ -608,9 +632,8 @@ def extract_text_xlsx(path):
                 wb.close()
                 return "\n\n".join(texts)
             finally:
-                # Stelle Original-Parser wieder her
-                if 'original_fromstring' in locals():
-                    openpyxl.xml.functions.fromstring = original_fromstring
+                # Stelle die Original-fromstring-Funktion wieder her
+                openpyxl.xml.functions.fromstring = original_fromstring
         else:
             wb = load_workbook(path, data_only=True)  # data_only=True gibt Werte statt Formeln
             for sheet_name in wb.sheetnames:
